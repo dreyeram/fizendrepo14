@@ -194,47 +194,92 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         }, [deviceId, resolution]);
 
         // ═══════════════════════════════════════
-        //  MJPEG Polling Loop — Fetches frames from Pi daemon at ~30fps
+        //  MJPEG Polling Loop — Sequential frame loading from Pi daemon
+        //  Waits for each frame to fully render before requesting the next.
+        //  This prevents request pileup and memory pressure.
         // ═══════════════════════════════════════
         useEffect(() => {
             if (!mjpegMode) return;
 
             let isActive = true;
+            let prevBlobUrl: string | null = null;
             const hostname = window.location.hostname || 'localhost';
+            const captureUrl = `http://${hostname}:5555/capture`;
 
-            async function pollFrame() {
+            async function loadNextFrame() {
                 if (!isActive) return;
+
                 try {
-                    const res = await fetch(`http://${hostname}:5555/capture`, { cache: 'no-store' });
-                    if (res.ok && isActive) {
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        if (mjpegImgRef.current && isActive) {
-                            const oldSrc = mjpegImgRef.current.src;
-                            mjpegImgRef.current.src = url;
-                            if (oldSrc && oldSrc.startsWith('blob:')) {
-                                URL.revokeObjectURL(oldSrc);
-                            }
-                            setStatus("connected");
-                        } else {
-                            URL.revokeObjectURL(url);
-                        }
+                    // Fetch the latest frame from the daemon
+                    const res = await fetch(`${captureUrl}?t=${Date.now()}`, {
+                        cache: 'no-store',
+                        signal: AbortSignal.timeout(3000),
+                    });
+
+                    if (!res.ok || !isActive) {
+                        // Retry after a short pause
+                        if (isActive) setTimeout(loadNextFrame, 200);
+                        return;
                     }
+
+                    const blob = await res.blob();
+                    if (!isActive) return;
+
+                    const newUrl = URL.createObjectURL(blob);
+
+                    // Wait for the image element to actually render this frame
+                    await new Promise<void>((resolve) => {
+                        if (!mjpegImgRef.current || !isActive) {
+                            URL.revokeObjectURL(newUrl);
+                            resolve();
+                            return;
+                        }
+
+                        const img = mjpegImgRef.current;
+
+                        const onLoad = () => {
+                            img.removeEventListener('load', onLoad);
+                            img.removeEventListener('error', onError);
+                            // Revoke the PREVIOUS blob URL (not the current one)
+                            if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+                            prevBlobUrl = newUrl;
+                            resolve();
+                        };
+
+                        const onError = () => {
+                            img.removeEventListener('load', onLoad);
+                            img.removeEventListener('error', onError);
+                            URL.revokeObjectURL(newUrl);
+                            resolve();
+                        };
+
+                        img.addEventListener('load', onLoad, { once: true });
+                        img.addEventListener('error', onError, { once: true });
+                        img.src = newUrl;
+                    });
+
+                    if (isActive) setStatus("connected");
+
                 } catch {
-                    // Connection lost, will retry
+                    // Network error or timeout — pause before retry
+                    if (isActive) await new Promise(r => setTimeout(r, 200));
                 }
+
+                // Immediately request the next frame (no setTimeout delay)
+                // This creates a natural throttle: as fast as the network + rendering allows
                 if (isActive) {
-                    mjpegRafRef.current = window.setTimeout(pollFrame, 33) as unknown as number; // ~30fps
+                    // Use requestAnimationFrame to sync with display refresh
+                    requestAnimationFrame(() => {
+                        if (isActive) loadNextFrame();
+                    });
                 }
             }
 
-            pollFrame();
+            loadNextFrame();
 
             return () => {
                 isActive = false;
-                if (mjpegRafRef.current !== null) {
-                    clearTimeout(mjpegRafRef.current as unknown as number);
-                }
+                if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
             };
         }, [mjpegMode]);
 
