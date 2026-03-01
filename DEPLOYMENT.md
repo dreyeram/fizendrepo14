@@ -88,7 +88,7 @@ sudo npm install -g pm2
 ### Step 4.2: Clone & Build
 ```bash
 cd ~
-git clone https://<YOUR_GITHUB_PAT>@github.com/dreyeram/endoscopy-app.git loyalmed
+git clone https://<YOUR_GITHUB_PAT>@github.com/dreyeram/m1esosent.git loyalmed
 cd loyalmed
 npm install
 npm run build
