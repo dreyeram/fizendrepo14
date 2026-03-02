@@ -139,11 +139,13 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 const hostname = window.location.hostname || 'localhost';
 
                 // Step 1: Try the Pi capture daemon on port 5555
-                // Smart retry logic:
-                //   - Connection refused (no daemon) → fall through to WebRTC immediately
-                //   - Daemon reachable but 'waiting' → retry (GStreamer still booting)
-                //   - Daemon reachable and 'streaming' → use MJPEG mode
+                // Retry logic:
+                //   - Allow INITIAL_GRACE_RETRIES (5 = 10s) for boot race (daemon not yet started)
+                //   - If daemon is never seen after grace period → fall to WebRTC (laptop)
+                //   - If daemon is seen at any point → keep retrying until 'streaming' or max
+                //   - If daemon returns 'streaming' → activate MJPEG mode immediately
                 const MAX_DAEMON_RETRIES = 30;
+                const INITIAL_GRACE_RETRIES = 5; // 10s grace for Pi boot race
                 let daemonExists = false;
 
                 for (let attempt = 1; attempt <= MAX_DAEMON_RETRIES; attempt++) {
@@ -163,28 +165,34 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                                 }
                                 return;
                             }
-                            // 'waiting' = daemon alive but GStreamer not connected yet
-                            console.log(`[Camera] Pi daemon waiting for GStreamer (attempt ${attempt}/${MAX_DAEMON_RETRIES})...`);
+                            if (data.status === 'waiting') {
+                                console.log(`[Camera] Pi daemon waiting for GStreamer (attempt ${attempt}/${MAX_DAEMON_RETRIES})...`);
+                                // Daemon alive, GStreamer booting — activate MJPEG mode immediately
+                                // The polling loop will handle waiting for frames
+                                if (isActive) {
+                                    setMjpegMode(true);
+                                    setStatus("connected");
+                                }
+                                return;
+                            }
                         }
-                    } catch (err: unknown) {
-                        // Connection refused = no daemon running at all (laptop/dev)
-                        // Don't retry — fall through to WebRTC immediately
-                        if (!daemonExists) {
-                            console.log("[Camera] No Pi daemon found — using WebRTC");
+                    } catch {
+                        // Connection refused or timeout
+                        if (!daemonExists && attempt >= INITIAL_GRACE_RETRIES) {
+                            // No daemon found after grace period → probably a laptop
+                            console.log(`[Camera] No Pi daemon after ${attempt} attempts — using WebRTC`);
                             break;
                         }
-                        // Daemon was alive before but now errored — transient, keep retrying
-                        console.log(`[Camera] Pi daemon error (attempt ${attempt}), retrying...`);
+                        console.log(`[Camera] Pi daemon not available (attempt ${attempt}), retrying...`);
                     }
                     if (attempt < MAX_DAEMON_RETRIES && isActive) {
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
 
-                // If daemon exists but never reached 'streaming', still use MJPEG mode
-                // (the MJPEG polling loop has its own retry for frame fetching)
+                // If daemon was ever seen, use MJPEG mode regardless
                 if (daemonExists && isActive) {
-                    console.log("[Camera] Pi daemon exists but GStreamer not streaming yet — activating MJPEG mode anyway");
+                    console.log("[Camera] Pi daemon exists — activating MJPEG mode");
                     setMjpegMode(true);
                     setStatus("connected");
                     return;
@@ -1252,6 +1260,15 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                                 }}
                             />
                         )}
+                        {/* DEBUG: Temporary state indicator — remove after fixing */}
+                        <div style={{
+                            position: 'absolute', top: 4, left: 4, zIndex: 999,
+                            background: 'rgba(0,0,0,0.7)', color: '#0f0', fontSize: '11px',
+                            padding: '2px 6px', borderRadius: 3, fontFamily: 'monospace',
+                            pointerEvents: 'none',
+                        }}>
+                            mjpeg:{mjpegMode ? 'Y' : 'N'} frame:{mjpegHasFrame ? 'Y' : 'N'} st:{status}
+                        </div>
                         {/* Dev Mode local camera fallback (Only plays if stream attached) */}
                         <video
                             ref={videoRef}
