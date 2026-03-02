@@ -125,6 +125,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         // ═══════════════════════════════════════
         const videoRef = useRef<HTMLVideoElement>(null);
         const [mjpegMode, setMjpegMode] = useState(false);
+        const [mjpegHasFrame, setMjpegHasFrame] = useState(false);
         const mjpegImgRef = useRef<HTMLImageElement>(null);
         const mjpegRafRef = useRef<number | null>(null);
 
@@ -258,7 +259,10 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                         if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
                         prevBlobUrl = newUrl;
                         consecutiveErrors = 0;
-                        if (isActive) setStatus("connected");
+                        if (isActive) {
+                            setStatus("connected");
+                            setMjpegHasFrame(true);
+                        }
                     } else {
                         URL.revokeObjectURL(newUrl);
                     }
@@ -1198,10 +1202,20 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                                 alt=""
                                 className="pointer-events-none"
                                 style={{
-                                    ...videoInnerStyle,
+                                    // Fill the 16:9 container exactly — GStreamer outputs native
+                                    // 1920x1080 MJPEG so objectFit:fill is correct and distortion-free.
+                                    // Do NOT use videoInnerStyle here — it applies captureArea
+                                    // translate/scale transforms intended for calibration mode only,
+                                    // which caused top/bottom cropping on the live feed.
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    objectFit: 'fill',
                                     display: 'block',
-                                    objectFit: 'contain',
-                                    visibility: mjpegImgRef.current?.src ? 'visible' : 'hidden',
+                                    visibility: mjpegHasFrame ? 'visible' : 'hidden',
+                                    transform: mirrored ? 'scaleX(-1)' : 'none',
                                 }}
                             />
                         )}

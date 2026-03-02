@@ -1,5 +1,5 @@
 [Unit]
-Description=Endoscopy Suite Camera Feed (GStreamer MJPEG to TCP port 5000)
+Description=Endoscopy Suite Camera Feed (GStreamer MJPEG to Display + TCP port 5000)
 After=network.target
 Wants=network.target
 
@@ -8,16 +8,19 @@ Type=simple
 User=lm
 Group=lm
 WorkingDirectory=/home/lm/loyalmed
-ExecStart=/home/lm/loyalmed/scripts/livefeed_vnc.sh
+ExecStart=/home/lm/loyalmed/scripts/livefeed_pi.sh
 Restart=always
 RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
-# Environment
+# Environment — force 1920x1080@30fps MJPEG from HDMI capture card
 Environment=VIDEO_DEVICE=/dev/video0
+Environment=WIDTH=1920
+Environment=HEIGHT=1080
+Environment=FRAMERATE=30
 
-# Allow time for camera device to be ready
+# Allow time for camera device + DRM to be ready
 ExecStartPre=/bin/sleep 5
 
 [Install]
