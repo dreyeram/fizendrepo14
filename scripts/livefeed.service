@@ -1,0 +1,24 @@
+[Unit]
+Description=Endoscopy Suite Camera Feed (GStreamer MJPEG to TCP port 5000)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=lm
+Group=lm
+WorkingDirectory=/home/lm/loyalmed
+ExecStart=/home/lm/loyalmed/scripts/livefeed_vnc.sh
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=VIDEO_DEVICE=/dev/video0
+
+# Allow time for camera device to be ready
+ExecStartPre=/bin/sleep 5
+
+[Install]
+WantedBy=multi-user.target
