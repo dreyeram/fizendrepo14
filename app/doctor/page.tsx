@@ -17,7 +17,7 @@ import MediaGalleryModal from "@/components/media/MediaGalleryModal";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { encodeProcedureType } from "@/types/procedureTypes";
-import { saveReport, createProcedure, getPatientDetails, updateProcedureType, endProcedure } from "@/app/actions/procedure";
+import { saveReport, createProcedure, getPatientDetails, updateProcedureType, endProcedure, exitProcedure } from "@/app/actions/procedure";
 import { saveReportPDF } from "@/app/actions/reports";
 import { getSeededDoctorId, getCurrentSession } from "@/app/actions/auth";
 import { getUserProfile } from "@/app/actions/settings";
@@ -511,9 +511,9 @@ export default function DoctorPage() {
                                 procedureId={displayId}
                                 patient={activePatient}
                                 onBack={async () => {
-                                    // Persist procedure status to DB (smart: CAPTURED if has media, COMPLETED if has report)
+                                    // User explicitly exiting — use exitProcedure for context-aware status
                                     try {
-                                        await endProcedure(displayId);
+                                        await exitProcedure(displayId);
                                     } catch (e) {
                                         console.error('Failed to persist procedure state on back:', e);
                                     }
@@ -549,11 +549,11 @@ export default function DoctorPage() {
                 captures={reportCaptures}
                 onUpdateCaptures={setReportCaptures}
                 onClose={async () => {
-                    // Persist procedure status to DB before closing
+                    // User explicitly closing annotation — use exitProcedure for context-aware status
                     const procId = segments.find(s => s.index === activeSegmentIndex)?.id;
                     if (procId && !procId.startsWith('temp-')) {
                         try {
-                            await endProcedure(procId);
+                            await exitProcedure(procId);
                         } catch (e) {
                             console.error('Failed to persist procedure state on annotate close:', e);
                         }

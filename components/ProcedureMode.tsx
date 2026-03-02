@@ -1048,6 +1048,9 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                                                 scopeScale={scopeScale}
                                                 zoom={scopeScale}
                                                 showGrid={isGrid}
+                                                activeShape={isCalibrating ? calibrationShape : (activeProfile?.shape || 'rectangle')}
+                                                isCalibrating={isCalibrating}
+                                                aspectRatioCorrection={settings.aspectRatio}
                                                 onResolutionChange={handleResolutionChange}
                                                 onCalibrationChange={handleCalibrationAreaChange}
                                             />

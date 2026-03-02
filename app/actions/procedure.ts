@@ -120,6 +120,64 @@ export async function endProcedure(procedureId: string) {
     }
 }
 
+/**
+ * Exit a procedure — called when the user explicitly exits via the Back/Exit button.
+ * Sets status based on what work was done:
+ * - Has report → COMPLETED
+ * - Has media but no report → CAPTURED  
+ * - No media, no report → CANCELLED (user exited without doing anything)
+ */
+export async function exitProcedure(procedureId: string) {
+    try {
+        const procExists = await prisma.procedure.findUnique({
+            where: { id: procedureId },
+            include: { media: true, report: true }
+        });
+
+        if (!procExists) throw new Error("Procedure not found");
+
+        let nextStatus = "CANCELLED";
+        if (procExists.report !== null) {
+            nextStatus = "COMPLETED";
+        } else if (procExists.media.length > 0) {
+            nextStatus = "CAPTURED";
+        }
+        // else: no media, no report → CANCELLED
+
+        await prisma.procedure.update({
+            where: { id: procedureId },
+            data: {
+                status: nextStatus as any,
+                endTime: new Date(),
+            },
+        });
+
+        // Audit log
+        const user = await getAuditUser();
+        if (user) {
+            await createAuditLog({
+                eventType: 'PROCEDURE_UPDATE',
+                userId: user.id,
+                username: user.username,
+                role: user.role,
+                resourceType: 'Procedure',
+                resourceId: procedureId,
+                action: 'Exited procedure (user-initiated)',
+                details: { status: nextStatus },
+                success: true
+            });
+        }
+
+        revalidatePath('/doctor');
+        revalidatePath('/assistant');
+
+        return { success: true, status: nextStatus };
+    } catch (error) {
+        console.error("Exit Procedure Error:", error);
+        return { success: false, error: "Failed to exit procedure." };
+    }
+}
+
 export async function updateProcedureStatus(procedureId: string, status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED') {
     try {
         const updateData: any = { status };

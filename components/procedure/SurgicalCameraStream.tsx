@@ -195,14 +195,15 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
 
         // ═══════════════════════════════════════
         //  MJPEG Polling Loop — Sequential frame loading from Pi daemon
-        //  Waits for each frame to fully render before requesting the next.
-        //  This prevents request pileup and memory pressure.
+        //  Each frame must fully load before requesting the next.
+        //  Targets ~60fps (limited by network + rendering speed).
         // ═══════════════════════════════════════
         useEffect(() => {
             if (!mjpegMode) return;
 
             let isActive = true;
             let prevBlobUrl: string | null = null;
+            let consecutiveErrors = 0;
             const hostname = window.location.hostname || 'localhost';
             const captureUrl = `http://${hostname}:5555/capture`;
 
@@ -210,68 +211,69 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 if (!isActive) return;
 
                 try {
-                    // Fetch the latest frame from the daemon
                     const res = await fetch(`${captureUrl}?t=${Date.now()}`, {
                         cache: 'no-store',
-                        signal: AbortSignal.timeout(3000),
+                        signal: AbortSignal.timeout(1500), // Tight timeout — 1.5s max per frame
                     });
 
                     if (!res.ok || !isActive) {
-                        // Retry after a short pause
-                        if (isActive) setTimeout(loadNextFrame, 200);
+                        consecutiveErrors++;
+                        if (isActive) setTimeout(loadNextFrame, Math.min(consecutiveErrors * 100, 2000));
                         return;
                     }
 
                     const blob = await res.blob();
-                    if (!isActive) return;
+                    if (!isActive || blob.size < 100) {
+                        // Too small = likely empty/error frame
+                        if (isActive) setTimeout(loadNextFrame, 50);
+                        return;
+                    }
 
                     const newUrl = URL.createObjectURL(blob);
 
-                    // Wait for the image element to actually render this frame
-                    await new Promise<void>((resolve) => {
-                        if (!mjpegImgRef.current || !isActive) {
-                            URL.revokeObjectURL(newUrl);
-                            resolve();
-                            return;
-                        }
+                    // Wait for img to render this frame, with a safety timeout
+                    const loaded = await Promise.race([
+                        new Promise<boolean>((resolve) => {
+                            if (!mjpegImgRef.current || !isActive) {
+                                URL.revokeObjectURL(newUrl);
+                                resolve(false);
+                                return;
+                            }
+                            const img = mjpegImgRef.current;
+                            const cleanup = () => {
+                                img.removeEventListener('load', onLoad);
+                                img.removeEventListener('error', onError);
+                            };
+                            const onLoad = () => { cleanup(); resolve(true); };
+                            const onError = () => { cleanup(); resolve(false); };
+                            img.addEventListener('load', onLoad, { once: true });
+                            img.addEventListener('error', onError, { once: true });
+                            img.src = newUrl;
+                        }),
+                        // Safety: if img never fires load/error, don't hang forever
+                        new Promise<boolean>(r => setTimeout(() => r(false), 500)),
+                    ]);
 
-                        const img = mjpegImgRef.current;
-
-                        const onLoad = () => {
-                            img.removeEventListener('load', onLoad);
-                            img.removeEventListener('error', onError);
-                            // Revoke the PREVIOUS blob URL (not the current one)
-                            if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
-                            prevBlobUrl = newUrl;
-                            resolve();
-                        };
-
-                        const onError = () => {
-                            img.removeEventListener('load', onLoad);
-                            img.removeEventListener('error', onError);
-                            URL.revokeObjectURL(newUrl);
-                            resolve();
-                        };
-
-                        img.addEventListener('load', onLoad, { once: true });
-                        img.addEventListener('error', onError, { once: true });
-                        img.src = newUrl;
-                    });
-
-                    if (isActive) setStatus("connected");
+                    if (loaded) {
+                        if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+                        prevBlobUrl = newUrl;
+                        consecutiveErrors = 0;
+                        if (isActive) setStatus("connected");
+                    } else {
+                        URL.revokeObjectURL(newUrl);
+                    }
 
                 } catch {
-                    // Network error or timeout — pause before retry
-                    if (isActive) await new Promise(r => setTimeout(r, 200));
+                    consecutiveErrors++;
+                    if (isActive) {
+                        await new Promise(r => setTimeout(r, Math.min(consecutiveErrors * 200, 2000)));
+                    }
                 }
 
-                // Immediately request the next frame (no setTimeout delay)
-                // This creates a natural throttle: as fast as the network + rendering allows
+                // Request next frame immediately (no rAF cap = lower latency)
                 if (isActive) {
-                    // Use requestAnimationFrame to sync with display refresh
-                    requestAnimationFrame(() => {
-                        if (isActive) loadNextFrame();
-                    });
+                    // Micro-delay to allow event loop to breathe
+                    setTimeout(loadNextFrame, 0);
                 }
             }
 
