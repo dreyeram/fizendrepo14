@@ -139,10 +139,13 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 const hostname = window.location.hostname || 'localhost';
 
                 // Step 1: Try the Pi capture daemon on port 5555
-                // RETRY LOOP: The daemon may not be ready when the page loads
-                // (GStreamer, daemon, and browser all race on boot).
-                // Keep trying every 2s for up to 60s before falling back to WebRTC.
+                // Smart retry logic:
+                //   - Connection refused (no daemon) → fall through to WebRTC immediately
+                //   - Daemon reachable but 'waiting' → retry (GStreamer still booting)
+                //   - Daemon reachable and 'streaming' → use MJPEG mode
                 const MAX_DAEMON_RETRIES = 30;
+                let daemonExists = false;
+
                 for (let attempt = 1; attempt <= MAX_DAEMON_RETRIES; attempt++) {
                     if (!isActive) return;
                     try {
@@ -150,28 +153,45 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                             signal: AbortSignal.timeout(2000)
                         });
                         if (statusRes.ok) {
+                            daemonExists = true;
                             const data = await statusRes.json();
-                            if (data.status === 'streaming' || data.status === 'waiting') {
-                                console.log(`[Camera] Pi capture daemon detected (attempt ${attempt}) — using MJPEG polling mode`);
+                            if (data.status === 'streaming') {
+                                console.log(`[Camera] Pi daemon streaming (attempt ${attempt}) — MJPEG mode`);
                                 if (isActive) {
                                     setMjpegMode(true);
                                     setStatus("connected");
                                 }
-                                return; // Daemon is available, use MJPEG mode
+                                return;
                             }
+                            // 'waiting' = daemon alive but GStreamer not connected yet
+                            console.log(`[Camera] Pi daemon waiting for GStreamer (attempt ${attempt}/${MAX_DAEMON_RETRIES})...`);
                         }
-                    } catch {
-                        console.log(`[Camera] Pi daemon not available (attempt ${attempt}/${MAX_DAEMON_RETRIES}), retrying in 2s...`);
+                    } catch (err: unknown) {
+                        // Connection refused = no daemon running at all (laptop/dev)
+                        // Don't retry — fall through to WebRTC immediately
+                        if (!daemonExists) {
+                            console.log("[Camera] No Pi daemon found — using WebRTC");
+                            break;
+                        }
+                        // Daemon was alive before but now errored — transient, keep retrying
+                        console.log(`[Camera] Pi daemon error (attempt ${attempt}), retrying...`);
                     }
-                    // Wait 2s before retrying (unless this is the last attempt)
                     if (attempt < MAX_DAEMON_RETRIES && isActive) {
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
 
-                console.log("[Camera] Pi daemon not available after 60s, trying WebRTC fallback...");
+                // If daemon exists but never reached 'streaming', still use MJPEG mode
+                // (the MJPEG polling loop has its own retry for frame fetching)
+                if (daemonExists && isActive) {
+                    console.log("[Camera] Pi daemon exists but GStreamer not streaming yet — activating MJPEG mode anyway");
+                    setMjpegMode(true);
+                    setStatus("connected");
+                    return;
+                }
 
                 // Step 2: Fall back to WebRTC (dev laptop with webcam)
+                console.log("[Camera] Trying WebRTC fallback...");
                 try {
                     if (!navigator.mediaDevices?.getUserMedia) {
                         console.log("[Camera] getUserMedia not available");
