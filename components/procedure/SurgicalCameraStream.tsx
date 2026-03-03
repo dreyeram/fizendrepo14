@@ -248,10 +248,10 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
 
             const hostname = window.location.hostname || 'localhost';
             const streamUrl = `http://${hostname}:5555/stream`;
-            const canvas = mjpegCanvasRef.current;
-            if (!canvas) return;
+            const cvs = mjpegCanvasRef.current;
+            if (!cvs) return;
 
-            const ctx = canvas.getContext('2d', { alpha: false });
+            const ctx = cvs.getContext('2d', { alpha: false });
             if (!ctx) return;
 
             // Off-screen image receives the MJPEG stream (hidden, never rendered)
@@ -259,16 +259,19 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             offscreenImg.crossOrigin = 'anonymous';
             let isActive = true;
             let hasReceivedFrame = false;
+            let cw = 1920, ch = 1080;
 
             offscreenImg.onload = () => {
                 if (!hasReceivedFrame) {
                     hasReceivedFrame = true;
                     // Set canvas resolution to match the stream
-                    canvas.width = offscreenImg.naturalWidth || 1920;
-                    canvas.height = offscreenImg.naturalHeight || 1080;
+                    cvs!.width = offscreenImg.naturalWidth || 1920;
+                    cvs!.height = offscreenImg.naturalHeight || 1080;
+                    cw = cvs!.width;
+                    ch = cvs!.height;
                     setMjpegHasFrame(true);
                     setStatus('connected');
-                    console.log(`[Camera] MJPEG stream active: ${canvas.width}x${canvas.height}`);
+                    console.log(`[Camera] MJPEG stream active: ${cw}x${ch}`);
                 }
             };
 
@@ -287,9 +290,9 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             // to the visible canvas at the display's refresh rate.
             // canvas.drawImage() is composited by Chromium's GPU at vsync.
             function renderLoop() {
-                if (!isActive) return;
+                if (!isActive || !ctx) return;
                 if (offscreenImg.complete && offscreenImg.naturalWidth > 0) {
-                    ctx.drawImage(offscreenImg, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(offscreenImg, 0, 0, cw, ch);
                 }
                 mjpegRafRef.current = requestAnimationFrame(renderLoop);
             }
