@@ -1,5 +1,17 @@
 [Unit]
 Description=Endoscopy Suite Camera Feed (GStreamer MJPEG to Display + TCP port 5000)
+# ─────────────────────────────────────────────────────────────
+# NOTE: This GStreamer service is NO LONGER REQUIRED for the
+# camera pipeline. The pi_capture_daemon.js now captures
+# directly from /dev/video0 using ffmpeg.
+#
+# To disable this service on the Pi:
+#   sudo systemctl stop livefeed
+#   sudo systemctl disable livefeed
+#
+# The daemon (managed by PM2) is the sole camera consumer now.
+# GStreamer is only kept here for reference / display overlay.
+# ─────────────────────────────────────────────────────────────
 After=network.target
 Wants=network.target
 
@@ -14,11 +26,11 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
-# Environment — force 1920x1080@60fps MJPEG from HDMI capture card
+# Environment — camera parameters
 Environment=VIDEO_DEVICE=/dev/video0
 Environment=WIDTH=1920
 Environment=HEIGHT=1080
-Environment=FRAMERATE=60
+Environment=FRAMERATE=30
 
 # Allow time for camera device + DRM to be ready
 ExecStartPre=/bin/sleep 5

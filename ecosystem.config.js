@@ -25,6 +25,12 @@ module.exports = {
             name: 'pi-capture-daemon',
             script: './scripts/pi_capture_daemon.js',
             cwd: '/home/lm/loyalmed',
+            env: {
+                VIDEO_DEVICE: '/dev/video0',
+                WIDTH: '1920',
+                HEIGHT: '1080',
+                FRAMERATE: '30',
+            },
             instances: 1,
             autorestart: true,
             watch: false,
