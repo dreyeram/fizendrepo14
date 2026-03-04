@@ -75,9 +75,11 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         },
         ref
     ) {
-        // imgRef points to the MJPEG <img> element showing the live camera feed
+        // imgRef points to a hidden img (unused in MJPEG Canvas mode)
         const imgRef = useRef<HTMLImageElement>(null);
         const canvasRef = useRef<HTMLCanvasElement | null>(null);
+        // Canvas for vsync-synced MJPEG display (eliminates tearing)
+        const canvasDisplayRef = useRef<HTMLCanvasElement>(null);
 
         // Recording refs
         const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -235,55 +237,150 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         }, [deviceId, resolution]);
 
         // ═══════════════════════════════════════
-        //  Native MJPEG stream — matches reference Pi app exactly
+        //  Canvas MJPEG renderer — vsync-synced, NO tearing
         //
-        //  The Pi daemon serves multipart/x-mixed-replace; boundary=frame
-        //  with NO Content-Length per part (same as Django StreamingHttpResponse).
-        //  The browser's native <img> MJPEG decoder atomically swaps the
-        //  displayed frame each time it sees a new --frame boundary.
-        //  Zero JavaScript frame timing — the browser handles it natively.
+        //  WHY: The native <img src="/stream"> approach updates the display
+        //  asynchronously — mid-refresh — causing the "glassy vertical lines"
+        //  (partial old frame + partial new frame visible simultaneously).
+        //
+        //  FIX: We fetch the MJPEG stream via ReadableStream, parse out
+        //  complete JPEG frames, decode them with createImageBitmap(), then
+        //  draw on a Canvas inside requestAnimationFrame() which is synced
+        //  to the display's vsync.  Frame swap ONLY happens on vsync boundaries.
         // ═══════════════════════════════════════
         useEffect(() => {
             if (!mjpegMode) return;
-            const img = mjpegImgRef.current;
-            if (!img) return;
+            const canvas = canvasDisplayRef.current;
+            if (!canvas) return;
 
             const hostname = window.location.hostname || 'localhost';
             const streamUrl = `http://${hostname}:5555/stream`;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
 
-            // Reconnect helper
-            let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
             let active = true;
+            let rafId = 0;
 
-            const onLoad = () => {
-                // The img element has received its first frame
-                setMjpegHasFrame(true);
-                setStatus('connected');
-            };
+            // The latest fully-decoded ImageBitmap, ready to paint
+            let pendingBitmap: ImageBitmap | null = null;
 
-            const onError = () => {
+            // RAF loop — draws the latest bitmap, synced to vsync
+            const paint = () => {
                 if (!active) return;
-                console.warn('[Camera] Stream error — reconnecting in 2s');
-                reconnectTimer = setTimeout(() => {
-                    if (active && img) img.src = `${streamUrl}?t=${Date.now()}`;
-                }, 2000);
+                rafId = requestAnimationFrame(paint);
+                if (!pendingBitmap) return;
+                const bm = pendingBitmap;
+                pendingBitmap = null;
+
+                // Resize canvas to match bitmap (only when resolution changes)
+                if (canvas.width !== bm.width || canvas.height !== bm.height) {
+                    canvas.width = bm.width;
+                    canvas.height = bm.height;
+                }
+                ctx.drawImage(bm, 0, 0);
+                bm.close();
             };
+            rafId = requestAnimationFrame(paint);
 
-            img.addEventListener('load', onLoad);
-            img.addEventListener('error', onError);
+            // MJPEG multipart stream parser
+            // Protocol: "--frame\r\nContent-Type: image/jpeg\r\n\r\n{JPEG}\r\n"
+            async function readStream() {
+                const SOI = [0xFF, 0xD8];
+                const EOI = [0xFF, 0xD9];
 
-            // Connect: browser opens the stream, native decoder takes over
-            img.src = streamUrl;
-            console.log(`[Camera] Native MJPEG stream: ${streamUrl}`);
+                let res: Response;
+                try {
+                    res = await fetch(streamUrl);
+                } catch {
+                    if (active) setTimeout(readStream, 2000);
+                    return;
+                }
+
+                if (!res.ok || !res.body) {
+                    if (active) setTimeout(readStream, 2000);
+                    return;
+                }
+
+                const reader = res.body.getReader();
+                let buf = new Uint8Array(0);
+
+                const append = (chunk: Uint8Array) => {
+                    const merged = new Uint8Array(buf.length + chunk.length);
+                    merged.set(buf, 0);
+                    merged.set(chunk, buf.length);
+                    buf = merged;
+                };
+
+                const indexOf = (haystack: Uint8Array, needle: number[], from: number): number => {
+                    outer: for (let i = from; i <= haystack.length - needle.length; i++) {
+                        for (let j = 0; j < needle.length; j++) {
+                            if (haystack[i + j] !== needle[j]) continue outer;
+                        }
+                        return i;
+                    }
+                    return -1;
+                };
+
+                try {
+                    while (active) {
+                        const { value, done } = await reader.read();
+                        if (done || !active) break;
+                        if (value) append(value);
+
+                        // Extract every complete JPEG frame
+                        while (true) {
+                            const start = indexOf(buf, SOI, 0);
+                            if (start === -1) { buf = new Uint8Array(0); break; }
+                            if (start > 0) { buf = buf.slice(start); }
+
+                            const end = indexOf(buf, EOI, 2);
+                            if (end === -1) break;  // incomplete — wait for more data
+
+                            const jpeg = buf.slice(0, end + 2);
+                            buf = buf.slice(end + 2);
+
+                            // Decode asynchronously — doesn't block the read loop
+                            const blob = new Blob([jpeg], { type: 'image/jpeg' });
+                            createImageBitmap(blob).then(bm => {
+                                if (!active) { bm.close(); return; }
+                                // Discard a pending bitmap that hasn't been painted yet
+                                if (pendingBitmap) pendingBitmap.close();
+                                pendingBitmap = bm;
+                                if (!mjpegHasFrame) {
+                                    setMjpegHasFrame(true);
+                                    setStatus('connected');
+                                }
+                            }).catch(() => { });
+                        }
+
+                        // Guard buffer size (10 MB)
+                        if (buf.length > 10 * 1024 * 1024) {
+                            buf = buf.slice(buf.length - 1024 * 1024);
+                        }
+                    }
+                } catch {
+                    /* stream interrupted */
+                } finally {
+                    reader.releaseLock();
+                    if (active) {
+                        console.warn('[Camera] Stream disconnected — reconnecting in 2s');
+                        setTimeout(readStream, 2000);
+                    }
+                }
+            }
+
+            readStream();
+            console.log(`[Camera] Canvas MJPEG stream: ${streamUrl}`);
 
             return () => {
                 active = false;
-                if (reconnectTimer) clearTimeout(reconnectTimer);
-                img.removeEventListener('load', onLoad);
-                img.removeEventListener('error', onError);
-                img.src = ''; // Close the HTTP connection
+                cancelAnimationFrame(rafId);
+                if (pendingBitmap) pendingBitmap.close();
             };
+            // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [mjpegMode]);
+
+
 
         // ═══════════════════════════════════════
         //  ARROW KEY CONTROLS — Sub-pixel calibration Accuracy
@@ -1191,12 +1288,11 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                         height: "100%",
                         background: "transparent",
                     }}>
-                        {/* MJPEG live feed — native browser MJPEG decoder */}
-                        {/* Matches reference Pi app: <img src="/api/video_feed"> */}
+                        {/* Canvas MJPEG renderer — vsync-synced, no tearing */}
+                        {/* Frames drawn via requestAnimationFrame, synced to display refresh */}
                         {mjpegMode && (
-                            <img
-                                ref={mjpegImgRef}
-                                alt=""
+                            <canvas
+                                ref={canvasDisplayRef}
                                 className="pointer-events-none"
                                 style={{
                                     position: 'absolute',
@@ -1204,10 +1300,10 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                                     left: 0,
                                     width: '100%',
                                     height: '100%',
-                                    objectFit: 'fill',
                                     display: 'block',
                                     visibility: mjpegHasFrame ? 'visible' : 'hidden',
                                     transform: mirrored ? 'scaleX(-1)' : 'none',
+                                    imageRendering: 'auto',
                                 }}
                             />
                         )}

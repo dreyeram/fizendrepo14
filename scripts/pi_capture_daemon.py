@@ -1,254 +1,246 @@
 #!/usr/bin/env python3
 """
-pi_capture_daemon.py — OpenCV MJPEG capture daemon
+pi_capture_daemon.py  — Ultra-simple MJPEG capture daemon
+==========================================================
+Philosophy: DO LESS. The simplest possible path = lowest latency + zero tearing.
 
-Exact clone of the reference Pi Django app's camera pipeline:
-  cv2.VideoCapture(0) → cap.read() → cv2.imencode('.jpg') → stream
+Pipeline:
+  V4L2 camera  →  OpenCV cap.read() (YUYV raw, then decoded to BGR)
+               →  cv2.imencode('.jpg')  (Pi CPU → clean JPEG, no hardware encoder)
+               →  multipart/x-mixed-replace HTTP stream
 
-This guarantees:
-  1. Complete frames (cap.read() returns a fully decoded frame)
-  2. Clean JPEG encoding (cv2.imencode handles it perfectly)
-  3. Zero tearing (no JPEG boundary parsing, no partial frames)
+The browser receives a clean MJPEG stream, identical to the reference Django app.
+The frontend renders it on a Canvas via requestAnimationFrame for vsync-correct display.
 
 Endpoints:
-  GET /stream    MJPEG live stream (<img src="/stream"> works)
-  GET /capture   Latest single JPEG frame
-  GET /status    JSON {status: 'streaming'|'waiting'}
+  GET /stream      — MJPEG multipart stream  (consumed by Canvas fetch reader)
+  GET /capture     — Latest frame as image/jpeg
+  GET /status      — JSON {status, fps}
+  OPTIONS *        — CORS preflight
 """
 
-import os
-import sys
-import cv2
-import time
-import json
-import threading
+import os, cv2, time, json, threading, io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ─── Configuration ───────────────────────────────────────────────
-VIDEO_DEVICE = int(os.environ.get('VIDEO_DEVICE_INDEX', '0'))
-VIDEO_DEVICE_PATH = f'/dev/video{VIDEO_DEVICE}'  # Full path for v4l2-ctl commands
-WIDTH = int(os.environ.get('WIDTH', '1920'))
-HEIGHT = int(os.environ.get('HEIGHT', '1080'))
-FRAMERATE = int(os.environ.get('FRAMERATE', '30'))
-HTTP_PORT = int(os.environ.get('HTTP_PORT', '5555'))
-JPEG_QUALITY = int(os.environ.get('JPEG_QUALITY', '85'))
+# ─── Config (set via PM2 env) ────────────────────────────────────
+DEVICE_INDEX = int(os.environ.get('VIDEO_DEVICE_INDEX', '0'))
+DEVICE_PATH  = f'/dev/video{DEVICE_INDEX}'
+WIDTH        = int(os.environ.get('WIDTH',        '1920'))
+HEIGHT       = int(os.environ.get('HEIGHT',       '1080'))
+FPS          = int(os.environ.get('FRAMERATE',    '30'))
+QUALITY      = int(os.environ.get('JPEG_QUALITY', '85'))
+PORT         = int(os.environ.get('HTTP_PORT',    '5555'))
 
-# ─── Shared state ────────────────────────────────────────────────
-latest_frame_lock = threading.Lock()
-latest_frame_jpeg = None       # bytes — last complete JPEG
-frame_event = threading.Event()
-camera_ok = False
+# ─── Shared frame state ──────────────────────────────────────────
+_lock         = threading.Lock()
+_frame_jpeg   = None     # bytes of latest JPEG
+_frame_event  = threading.Event()
+_capture_fps  = 0.0
+
+ENCODE_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, QUALITY]
 
 
-def capture_loop():
-    """
-    Continuously read frames from the camera using OpenCV.
-    Forces V4L2 backend and explicit resolution/MJPG format.
-    """
-    global latest_frame_jpeg, camera_ok
-
-    # Aggressive Hardware Signal Cleanup
-    # These settings strip out the ISP processing that causes "glassy lines" and halos.
-    # We do this before opening the camera handle to ensure the hardware is initialized clean.
-    # Use the full device path for v4l2-ctl (integer index is invalid for v4l2-ctl)
-    v4l2_cmds = [
-        f"v4l2-ctl -d {VIDEO_DEVICE_PATH} --set-ctrl=power_line_frequency=1", # 50Hz India
-        f"v4l2-ctl -d {VIDEO_DEVICE_PATH} --set-ctrl=sharpness=0",            # No ringing halos
-        f"v4l2-ctl -d {VIDEO_DEVICE_PATH} --set-ctrl=backlight_compensation=0" # No vertical banding
+def apply_hardware_controls():
+    """Strip hardware ISP post-processing that causes halo/shimmer artifacts."""
+    cmds = [
+        f'v4l2-ctl -d {DEVICE_PATH} --set-ctrl=power_line_frequency=1',  # 50 Hz (India)
+        f'v4l2-ctl -d {DEVICE_PATH} --set-ctrl=sharpness=0',             # no ringing
+        f'v4l2-ctl -d {DEVICE_PATH} --set-ctrl=backlight_compensation=0',# no banding
     ]
-    for cmd in v4l2_cmds:
-        os.system(f"{cmd} 2>/dev/null")
+    for cmd in cmds:
+        os.system(cmd + ' 2>/dev/null')
 
-    print(f"[Capture] Opening camera index {VIDEO_DEVICE} with CAP_V4L2")
-    # Use V4L2 backend for better control on Linux
-    cap = cv2.VideoCapture(VIDEO_DEVICE, cv2.CAP_V4L2)
 
-    if not cap.isOpened():
-        print(f"[Capture] ERROR: Cannot open camera {VIDEO_DEVICE}")
-        camera_ok = False
-        time.sleep(3)
-        return capture_loop()
+def capture_thread():
+    """Capture frames from the camera and push to shared state."""
+    global _frame_jpeg, _capture_fps
 
-    # DO NOT set FOURCC=MJPG — that requests the hardware MJPEG encoder
-    # which is FAULTY and produces corrupt frames (cv2.error: !buf.empty())
-    # Let OpenCV default to YUYV raw capture: the Pi CPU encodes clean JPEG.
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, FRAMERATE)
-
-    # Check what we actually got
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-    fourcc_str = "".join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])
-    
-    print(f"[Capture] Camera configuration:")
-    print(f"  Resolution : {actual_w}x{actual_h} (Requested {WIDTH}x{HEIGHT})")
-    print(f"  Framerate  : {actual_fps}fps (Requested {FRAMERATE})")
-    print(f"  Format     : {fourcc_str}")
-
-    camera_ok = True
-    encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+    apply_hardware_controls()
 
     while True:
-        success, frame = cap.read()
+        print(f'[Capture] Opening {DEVICE_PATH} (index {DEVICE_INDEX})…')
+        cap = cv2.VideoCapture(DEVICE_INDEX, cv2.CAP_V4L2)
 
-        # Guard: skip empty/corrupt frames without crashing
-        if not success or frame is None or frame.size == 0:
-            print("[Capture] Empty frame from cap.read() — skipping")
-            time.sleep(0.01)
+        if not cap.isOpened():
+            print('[Capture] ERROR: Camera not found — retrying in 3 s')
+            time.sleep(3)
             continue
 
-        # Encode the frame as JPEG — identical to reference app
-        try:
-            ret, buffer = cv2.imencode('.jpg', frame, encode_params)
-        except cv2.error as e:
-            print(f"[Capture] imencode error (skipping frame): {e}")
-            continue
-        if not ret or buffer is None:
-            continue
+        # Request resolution/fps.  Do NOT set FOURCC=MJPG — that activates the
+        # hardware MJPEG encoder which produces corrupted frames on this card.
+        # Default (YUYV/uncompressed) → OpenCV decodes cleanly to BGR.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS,          FPS)
 
-        jpeg_bytes = buffer.tobytes()
+        aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        af = cap.get(cv2.CAP_PROP_FPS)
+        print(f'[Capture] {aw}×{ah} @{af:.0f} fps  (requested {WIDTH}×{HEIGHT} @{FPS})')
 
-        with latest_frame_lock:
-            latest_frame_jpeg = jpeg_bytes
+        t0       = time.time()
+        n_frames = 0
 
-        frame_event.set()
-        frame_event.clear()
+        while True:
+            ok, bgr = cap.read()
+
+            if not ok or bgr is None or bgr.size == 0:
+                # Single bad frame — skip without restarting
+                time.sleep(0.005)
+                continue
+
+            try:
+                ret, buf = cv2.imencode('.jpg', bgr, ENCODE_PARAMS)
+            except cv2.error:
+                continue
+            if not ret:
+                continue
+
+            jpeg = buf.tobytes()
+
+            with _lock:
+                _frame_jpeg = jpeg
+
+            _frame_event.set()
+            _frame_event.clear()
+
+            n_frames += 1
+            elapsed = time.time() - t0
+            if elapsed >= 2.0:
+                _capture_fps = n_frames / elapsed
+                n_frames = 0
+                t0 = time.time()
+
+        cap.release()
 
 
-class StreamHandler(BaseHTTPRequestHandler):
-    """HTTP handler serving MJPEG stream and single frame capture."""
+# ─── HTTP handler ────────────────────────────────────────────────
 
-    def log_message(self, format, *args):
-        """Suppress default logging to avoid console spam."""
-        pass
+class Handler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler — MJPEG stream + single-frame capture + status."""
 
-    def do_GET(self):
-        if self.path == '/stream':
-            self._handle_stream()
-        elif self.path == '/capture':
-            self._handle_capture()
-        elif self.path == '/status':
-            self._handle_status()
-        else:
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b'Not found')
+    def log_message(self, *args):
+        pass   # silence per-request logging
+
+    def _cors(self):
+        self.send_header('Access-Control-Allow-Origin',  '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self._cors()
         self.end_headers()
 
-    def _handle_stream(self):
+    def do_GET(self):
+        path = self.path.split('?')[0]
+        if path == '/stream':
+            self._stream()
+        elif path == '/capture':
+            self._capture()
+        elif path == '/status':
+            self._status()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    # ── /stream ──────────────────────────────────────────────────
+    def _stream(self):
         """
-        MJPEG stream — EXACT format of the reference Django app:
-          Content-Type: multipart/x-mixed-replace; boundary=frame
-          Each part:
-            --frame\r\n
-            Content-Type: image/jpeg\r\n\r\n
-            {JPEG bytes}\r\n
+        Standard multipart/x-mixed-replace MJPEG stream.
+        Format exactly matches the reference Django app:
+          --frame\r\n
+          Content-Type: image/jpeg\r\n\r\n
+          {JPEG bytes}\r\n
         """
         self.send_response(200)
-        self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Content-Type',  'multipart/x-mixed-replace; boundary=frame')
+        self.send_header('Cache-Control', 'no-cache, no-store')
+        self.send_header('Connection',    'keep-alive')
+        self.send_header('Pragma',        'no-cache')
+        self._cors()
         self.end_headers()
 
         try:
             while True:
-                frame_event.wait(timeout=2.0)
-
-                with latest_frame_lock:
-                    jpeg = latest_frame_jpeg
-
+                _frame_event.wait(timeout=3.0)
+                with _lock:
+                    jpeg = _frame_jpeg
                 if jpeg is None:
                     continue
-
-                # Yield EXACTLY like the reference Django app
-                self.wfile.write(b'--frame\r\n'
-                                 b'Content-Type: image/jpeg\r\n\r\n' +
-                                 jpeg +
-                                 b'\r\n')
+                part = (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' +
+                    jpeg +
+                    b'\r\n'
+                )
+                self.wfile.write(part)
                 self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass   # client disconnected
 
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # Client disconnected
-
-    def _handle_capture(self):
-        """Single JPEG frame."""
-        with latest_frame_lock:
-            jpeg = latest_frame_jpeg
-
+    # ── /capture ─────────────────────────────────────────────────
+    def _capture(self):
+        with _lock:
+            jpeg = _frame_jpeg
         if jpeg is None:
             self.send_response(503)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self._cors()
             self.end_headers()
-            self.wfile.write(json.dumps({'error': 'No frame yet'}).encode())
+            self.wfile.write(b'{"error":"no frame yet"}')
             return
-
         self.send_response(200)
-        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Type',   'image/jpeg')
         self.send_header('Content-Length', str(len(jpeg)))
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control',  'no-cache')
+        self._cors()
         self.end_headers()
         self.wfile.write(jpeg)
 
-    def _handle_status(self):
-        """JSON status."""
+    # ── /status ──────────────────────────────────────────────────
+    def _status(self):
+        with _lock:
+            have = _frame_jpeg is not None
+        body = json.dumps({'status': 'streaming' if have else 'waiting',
+                           'fps': round(_capture_fps, 1)}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self._cors()
         self.end_headers()
-        status = 'streaming' if latest_frame_jpeg else 'waiting'
-        self.wfile.write(json.dumps({'status': status}).encode())
+        self.wfile.write(body)
 
 
-class ThreadedHTTPServer(HTTPServer):
-    """Handle each request in a new thread (needed for /stream)."""
-    daemon_threads = True
-
-    def process_request(self, request, client_address):
-        t = threading.Thread(target=self._handle, args=(request, client_address))
-        t.daemon = True
+class ThreadedServer(HTTPServer):
+    """Each HTTP request gets its own daemon thread."""
+    def process_request(self, req, addr):
+        t = threading.Thread(target=self._handle1, args=(req, addr), daemon=True)
         t.start()
 
-    def _handle(self, request, client_address):
+    def _handle1(self, req, addr):
         try:
-            self.finish_request(request, client_address)
+            self.finish_request(req, addr)
         except Exception:
-            self.handle_error(request, client_address)
+            self.handle_error(req, addr)
         finally:
-            self.shutdown_request(request)
-
-
-def main():
-    print('═══════════════════════════════════════════════════')
-    print(f' CAPTURE DAEMON (Python/OpenCV)  http://0.0.0.0:{HTTP_PORT}')
-    print(f' Camera  : index {VIDEO_DEVICE}  {WIDTH}x{HEIGHT}@{FRAMERATE}fps')
-    print(f' Quality : JPEG {JPEG_QUALITY}%')
-    print(f' Stream  : http://0.0.0.0:{HTTP_PORT}/stream')
-    print('═══════════════════════════════════════════════════')
-
-    # Start capture in background thread
-    cap_thread = threading.Thread(target=capture_loop, daemon=True)
-    cap_thread.start()
-
-    # Start HTTP server
-    server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), StreamHandler)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print('\n[Shutdown] Bye.')
-        server.shutdown()
+            self.shutdown_request(req)
 
 
 if __name__ == '__main__':
-    main()
+    print('═══════════════════════════════════════════════════════')
+    print(f' PI CAPTURE DAEMON  (Python + OpenCV)')
+    print(f' Device  : {DEVICE_PATH}  ({WIDTH}×{HEIGHT} @{FPS} fps)')
+    print(f' Quality : JPEG {QUALITY}%')
+    print(f' Stream  : http://0.0.0.0:{PORT}/stream')
+    print('═══════════════════════════════════════════════════════')
+
+    # Capture thread runs independently, feeds _frame_jpeg
+    threading.Thread(target=capture_thread, daemon=True).start()
+
+    # HTTP server — blocks forever
+    srv = ThreadedServer(('0.0.0.0', PORT), Handler)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print('\n[Shutdown]')
+        srv.shutdown()
