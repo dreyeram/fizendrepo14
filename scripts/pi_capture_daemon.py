@@ -69,42 +69,33 @@ def capture_thread():
         # Request resolution/fps.  Do NOT set FOURCC=MJPG — that activates the
         # hardware MJPEG encoder which produces corrupted frames on this card.
         # Default (YUYV/uncompressed) → OpenCV decodes cleanly to BGR.
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS,          FPS)
+        # Default to 720p if not specified — more stable for USB bandwidth
+        target_w = WIDTH if WIDTH > 0 else 1280
+        target_h = HEIGHT if HEIGHT > 0 else 720
+        
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  target_w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+        cap.set(cv2.CAP_PROP_FPS,          30) # Force 30 for stability
 
         aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        af = cap.get(cv2.CAP_PROP_FPS)
-        print(f'[Capture] {aw}×{ah} @{af:.0f} fps  (requested {WIDTH}×{HEIGHT} @{FPS})')
-
-        t0       = time.time()
-        n_frames = 0
+        print(f'[Capture] {aw}×{ah} capture active')
 
         while True:
-            ok, bgr = cap.read()
+            # Use grab() + retrieve() for more atomic buffer synchronization
+            ok = cap.grab()
+            if not ok: continue
+            
+            ok, bgr = cap.retrieve()
+            if not ok or bgr is None: continue
 
-            if not ok or bgr is None or bgr.size == 0:
-                # Single bad frame — skip without restarting
-                time.sleep(0.005)
-                continue
-
-            # ── DE-INTERLACE ──────────────────────────────────────────
-            # The endoscope camera outputs 1080i (interlaced).
-            # Even rows = field 1 (time T), Odd rows = field 2 (time T+1/60s).
-            # When the scope moves, the two fields show slightly different
-            # positions → horizontal bands (the "glassy lines").
-            #
-            # Fix: extract only even-numbered rows (one complete field),
-            # then scale back to the full frame height using bilinear
-            # interpolation ("bob" de-interlacing). This is the standard
-            # medical video de-interlacing method.
+            # ── SMOOTH ARTIFACTS ─────────────────────────────────────
+            # A 3x3 median blur is the "magic bullet" for hospital 1080i
+            # "comb" artifacts. It removes the jaggies without the
+            # 50% resolution loss of bob-deinterlacing.
             # ─────────────────────────────────────────────────────────
-            h, w = bgr.shape[:2]
-            even_field = bgr[0::2, :]                               # every other row
-            bgr = cv2.resize(even_field, (w, h), interpolation=cv2.INTER_LINEAR)
-
             try:
+                bgr = cv2.medianBlur(bgr, 3)
                 ret, buf = cv2.imencode('.jpg', bgr, ENCODE_PARAMS)
             except cv2.error:
                 continue
