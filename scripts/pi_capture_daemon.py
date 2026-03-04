@@ -46,8 +46,16 @@ def capture_loop():
     """
     global latest_frame_jpeg, camera_ok
 
-    # Force 50Hz power line frequency (India) to reduce flickering/lines
-    os.system(f"v4l2-ctl -d {VIDEO_DEVICE} --set-ctrl=power_line_frequency=1 2>/dev/null")
+    # Aggressive Hardware Signal Cleanup
+    # These settings strip out the ISP processing that causes "glassy lines" and halos.
+    # We do this before opening the camera handle to ensure the hardware is initialized clean.
+    v4l2_cmds = [
+        f"v4l2-ctl -d {VIDEO_DEVICE} --set-ctrl=power_line_frequency=1", # 50Hz (India)
+        f"v4l2-ctl -d {VIDEO_DEVICE} --set-ctrl=sharpness=0",            # Disable sharpening (ringing)
+        f"v4l2-ctl -d {VIDEO_DEVICE} --set-ctrl=backlight_compensation=0" # Disable contrast banding
+    ]
+    for cmd in v4l2_cmds:
+        os.system(f"{cmd} 2>/dev/null")
 
     print(f"[Capture] Opening camera index {VIDEO_DEVICE} with CAP_V4L2")
     # Use V4L2 backend for better control on Linux
