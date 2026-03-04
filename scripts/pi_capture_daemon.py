@@ -42,28 +42,43 @@ camera_ok = False
 def capture_loop():
     """
     Continuously read frames from the camera using OpenCV.
-    This is the EXACT same method as the reference Django app.
+    Forces V4L2 backend and explicit resolution/MJPG format.
     """
     global latest_frame_jpeg, camera_ok
 
-    print(f"[Capture] Opening camera index {VIDEO_DEVICE}")
-    cap = cv2.VideoCapture(VIDEO_DEVICE)
+    # Force 50Hz power line frequency (India) to reduce flickering/lines
+    os.system(f"v4l2-ctl -d {VIDEO_DEVICE} --set-ctrl=power_line_frequency=1 2>/dev/null")
+
+    print(f"[Capture] Opening camera index {VIDEO_DEVICE} with CAP_V4L2")
+    # Use V4L2 backend for better control on Linux
+    cap = cv2.VideoCapture(VIDEO_DEVICE, cv2.CAP_V4L2)
 
     if not cap.isOpened():
         print(f"[Capture] ERROR: Cannot open camera {VIDEO_DEVICE}")
         camera_ok = False
         time.sleep(3)
-        return capture_loop()  # retry
+        return capture_loop()
 
-    # Set camera parameters
+    # CRITICAL: Set format to MJPEG FIRST to handle bandwidth correctly
+    # 'M', 'J', 'P', 'G'
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    
+    # Force the resolution
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FRAMERATE)
 
+    # Check what we actually got
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"[Capture] Camera opened: {actual_w}x{actual_h} @{actual_fps}fps")
+    actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+    fourcc_str = "".join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])
+    
+    print(f"[Capture] Camera configuration:")
+    print(f"  Resolution : {actual_w}x{actual_h} (Requested {WIDTH}x{HEIGHT})")
+    print(f"  Framerate  : {actual_fps}fps (Requested {FRAMERATE})")
+    print(f"  Format     : {fourcc_str}")
 
     camera_ok = True
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
