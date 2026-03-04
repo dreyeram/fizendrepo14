@@ -81,6 +81,9 @@ def capture_thread():
         ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f'[Capture] {aw}×{ah} capture active')
 
+        t0       = time.time()
+        n_frames = 0
+
         while True:
             # Use grab() + retrieve() for more atomic buffer synchronization
             ok = cap.grab()
