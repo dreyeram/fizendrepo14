@@ -799,8 +799,11 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 return cropAndMask(c, c.width, c.height).toDataURL('image/png', 1.0);
             }
             try {
-                const host = window.location.hostname || 'localhost';
-                const res = await fetch(`http://${host}:5555/capture`); if (!res.ok) return null;
+                let baseUrl = `http://${window.location.hostname || 'localhost'}:5555`;
+                if (_wsUrl) {
+                    try { const u = new URL(_wsUrl); baseUrl = `http://${u.hostname}:${u.port || '80'}`; } catch { }
+                }
+                const res = await fetch(`${baseUrl}/capture`); if (!res.ok) return null;
                 const blob = await res.blob(), blobUrl = URL.createObjectURL(blob);
                 return await new Promise<string | null>((resolve, reject) => {
                     const img = new Image();
@@ -820,12 +823,15 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                     img.src = blobUrl;
                 });
             } catch (e) { console.error('[Capture]', e); return null; }
-        }, [status, captureArea, aspectRatioCorrection, activeShape, cropAndMask]);
+        }, [status, captureArea, aspectRatioCorrection, activeShape, cropAndMask, _wsUrl]);
 
         const startRecording = useCallback(async (): Promise<boolean> => {
             try {
-                const host = window.location.hostname || 'localhost';
-                const r = await fetch(`http://${host}:5555/record/start`).catch(() => null);
+                let baseUrl = `http://${window.location.hostname || 'localhost'}:5555`;
+                if (_wsUrl) {
+                    try { const u = new URL(_wsUrl); baseUrl = `http://${u.hostname}:${u.port || '80'}`; } catch { }
+                }
+                const r = await fetch(`${baseUrl}/record/start`).catch(() => null);
                 if (r?.ok) return true;
             } catch { }
             if (status === 'streaming' && videoRef.current?.srcObject instanceof MediaStream) {
@@ -837,12 +843,15 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 } catch { }
             }
             return false;
-        }, [status]);
+        }, [status, _wsUrl]);
 
         const stopRecording = useCallback(async (): Promise<string | null> => {
             try {
-                const host = window.location.hostname || 'localhost';
-                const r = await fetch(`http://${host}:5555/record/stop`).catch(() => null);
+                let baseUrl = `http://${window.location.hostname || 'localhost'}:5555`;
+                if (_wsUrl) {
+                    try { const u = new URL(_wsUrl); baseUrl = `http://${u.hostname}:${u.port || '80'}`; } catch { }
+                }
+                const r = await fetch(`${baseUrl}/record/stop`).catch(() => null);
                 if (r?.ok) { const d = await r.json(); return d.filename; }
             } catch { }
             if (mediaRecorderRef.current?.state !== 'inactive') {

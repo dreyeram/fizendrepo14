@@ -892,27 +892,17 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     //  RENDER
     // ═══════════════════════════════════════
     return (
-        <div className="flex h-screen w-full bg-transparent text-white font-sans overflow-hidden select-none">
+        <div className="flex h-screen w-full bg-black text-white font-sans overflow-hidden select-none">
 
             {/* ═══ LEFT: VIDEO FEED ═══ */}
             <main
                 ref={constraintsRef}
-                className={`${isCompareMode ? 'w-full' : 'w-[75%]'} relative flex flex-col min-w-0 cursor-default overflow-hidden shrink-0 transition-all duration-300 bg-transparent`}
+                className={`${isCompareMode ? 'w-full' : 'w-[75%]'} relative flex flex-col min-w-0 cursor-default overflow-hidden shrink-0 transition-all duration-300 bg-black`}
                 onClick={() => {
                     if (historyExpanded) setHistoryExpanded(false);
                 }}
             >
-                {!isCompareMode && (
-                    <button
-                        onClick={handleBack}
-                        className="absolute top-3 left-3 z-[70] w-9 h-9 rounded-full bg-black/80 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-all border border-white/10 shadow-lg"
-                        title="Back to Dashboard"
-                    >
-                        <ArrowLeft size={16} />
-                    </button>
-                )}
-
-                <div className="flex-1 relative bg-transparent overflow-hidden">
+                <div className="flex-1 relative bg-black overflow-hidden">
                     {isCompareMode ? (
                         <div className="w-full h-full flex flex-col overflow-hidden bg-black relative">
                             {/* Global Exit Compare Button - Top Right */}
@@ -1438,24 +1428,13 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                             <img src={previewImage} className="max-w-full max-h-full object-contain" alt="Captured" />
                             <button
                                 onClick={() => setPreviewImage(null)}
-                                className="absolute top-4 right-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-white/10 flex items-center justify-center text-white/70 hover:text-white transition-all border border-white/10 backdrop-blur-md"
-                                title="Return to Live Feed"
+                                className="absolute top-4 right-4 z-[80] w-12 h-12 rounded-full bg-black/80 hover:bg-red-600 flex items-center justify-center text-white/70 hover:text-white transition-all border border-white/20 shadow-2xl"
+                                title="Close Preview"
                             >
-                                <X size={16} />
+                                <X size={24} />
                             </button>
-                            <div className="absolute top-4 left-12 px-3 py-1.5 rounded-full bg-indigo-600/20 border border-indigo-500/30 backdrop-blur-md z-20">
-                                <span className="text-[10px] font-black text-indigo-100 uppercase tracking-widest">Image Preview</span>
-                            </div>
-                            {/* Live preview circle — click to return to live feed */}
-                            <div
-                                className="absolute bottom-6 right-6 z-[60] w-44 h-44 rounded-full border-2 border-white/20 shadow-2xl overflow-hidden bg-black ring-4 ring-black/50 cursor-pointer hover:ring-indigo-500/30 hover:border-indigo-400/50 transition-all group"
-                                onClick={() => setPreviewImage(null)}
-                                title="Return to Live Feed"
-                            >
-                                <LivePreviewCircle deviceId={selectedDeviceId} className="w-full h-full" captureArea={calibrationArea || activeProfile?.captureArea} aspectRatioCorrection={settings.aspectRatio} />
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors">
-                                    <span className="text-[9px] font-black text-white uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Go Live</span>
-                                </div>
+                            <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-indigo-600/20 border border-indigo-500/30 backdrop-blur-md z-20">
+                                <span className="text-[11px] font-black text-indigo-100 uppercase tracking-widest">Image Preview</span>
                             </div>
                         </div>
                     ) : (
@@ -1522,20 +1501,13 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         )}
                     </AnimatePresence>
 
-                    {isRecording && (
-                        <div className="absolute top-3 right-3 z-[50] flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-950/80 border border-red-500/30">
-                            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                            <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">REC</span>
-                            <span ref={timerDisplayRef} className="text-[10px] font-mono text-red-400/70">00:00</span>
-                        </div>
-                    )}
-
                     {cameraError && (
-                        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/80">
-                            <div className="bg-red-900/90 border-2 border-red-500 p-6 rounded-xl max-w-lg text-white">
-                                <h3 className="text-xl font-bold mb-2 flex items-center gap-2"><AlertCircle /> Camera Error</h3>
-                                <p className="text-sm mb-4">{cameraError}</p>
-                                <button onClick={() => window.location.reload()} className="px-4 py-2 bg-white text-red-900 font-bold rounded">Reload</button>
+                        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/90">
+                            <div className="bg-red-950/80 border border-red-500/50 p-6 rounded-2xl max-w-md text-white shadow-2xl backdrop-blur-md text-center">
+                                <AlertCircle size={40} className="text-red-500 mx-auto mb-3" />
+                                <h3 className="text-sm font-black uppercase tracking-widest mb-2 text-red-200">Camera Interrupted</h3>
+                                <p className="text-xs text-zinc-400 mb-6">{cameraError}</p>
+                                <button onClick={() => window.location.reload()} className="px-6 py-2.5 bg-white hover:bg-zinc-200 text-black font-bold text-xs uppercase tracking-wider rounded-xl transition-colors">Reload Interface</button>
                             </div>
                         </div>
                     )}
@@ -1544,7 +1516,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
 
             {/* ═══ RIGHT: TOOL PANEL ═══ */}
             {!isCompareMode && (
-                <div className="w-[25%] h-full p-4 shrink-0 flex items-center justify-center bg-transparent relative z-20 pointer-events-none">
+                <div className="w-[25%] h-full shrink-0 flex flex-col bg-zinc-950 relative z-20 shadow-[-20px_0_60px_rgba(0,0,0,0.8)] border-l border-white/5">
                     <ProcedureToolPanel
                         patient={patient}
                         timer={timerRef.current}
