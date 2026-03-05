@@ -1,10 +1,8 @@
 // =============================================================================
-//  ecosystem.config.js  ·  PM2 process configuration  ·  SURGICAL GRADE v4
+//  ecosystem.config.js  ·  PM2 process configuration  ·  SURGICAL GRADE v4.1
 //
 //  BEFORE STARTING — install dependencies once:
-//    cd ~/loyalmed && npm install node-webcam ws
-//    # fswebcam is pre-installed on Raspberry Pi OS — if not:
-//    #   sudo apt install fswebcam
+//    cd ~/loyalmed && npm install ws
 //
 //  START / RESTART:
 //    pm2 delete all
@@ -14,8 +12,7 @@
 //
 //  VERIFY CAPTURE MODE:
 //    curl -s http://localhost:5555/status | python3 -m json.tool
-//    # Look for: "mode": "node-webcam"  ← primary mode
-//    # If you see: "mode": "ffmpeg"     ← npm install node-webcam first
+//    # Look for: "mode": "ffmpeg"  ← direct V4L2 → WebSocket pipe
 // =============================================================================
 
 module.exports = {
@@ -87,13 +84,9 @@ module.exports = {
                 // UltraSemi USB3 Video supports: 1920x1080, 2560x1440, 640x480
                 RESOLUTION: '1920x1080',
 
-                // ── Framerate: node-webcam captures one JPEG per call in a loop ──
-                // 30fps = ~33ms interval. Increasing beyond 30 won't help with
-                // fswebcam as each capture is a discrete syscall, not a streaming pipe.
+                // ── Framerate settings ──
+                // Higher values (up to 60) may be supported by certain capture devices.
                 FRAMERATE: '30',
-
-                // ── JPEG quality: 85 is balanced for surgical clarity vs frame size ──
-                JPEG_QUALITY: '85',
 
                 // ── HTTP / WebSocket server port ───────────────────────────
                 // WebSocket primary endpoint: ws://localhost:5555/stream
