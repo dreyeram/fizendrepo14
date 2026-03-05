@@ -247,6 +247,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
 
         // ── React state ───────────────────────────────────────────────────────
         const [status, setStatus] = useState<StreamStatus>('connecting');
+        const [hasFrame, setHasFrame] = useState(false);
         const [wrapperSize, setWrapperSize] = useState({ w: 0, h: 0 });
         const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
         const [dragMode, setDragMode] = useState<DragMode>('none');
@@ -400,6 +401,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                     pendingFrame = bm;
                     if (!hasFrameRef.current) {
                         hasFrameRef.current = true;
+                        setHasFrame(true);
                         setStatus('connected');
                         showCanvas();
                         console.log('[Stream] ✓ First frame — surgical-grade live');
@@ -950,9 +952,10 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                                     position: 'absolute', top: 0, left: 0,
                                     width: '100%', height: '100%',
                                     display: 'block',
-                                    visibility: hasFrameRef.current ? 'visible' : 'hidden',  // shown imperatively by showCanvas()
+                                    visibility: hasFrame ? 'visible' : 'hidden',
                                     transform: mirrored ? 'scaleX(-1)' : 'none',
                                     imageRendering: 'auto',
+                                    zIndex: 10,
                                 }}
                             />
                         )}
