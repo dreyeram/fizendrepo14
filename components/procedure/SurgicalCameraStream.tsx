@@ -950,7 +950,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
 
         // ── RENDER ────────────────────────────────────────────────────────────
         return (
-            <div ref={wrapperRef} className={`relative w-full h-full bg-transparent overflow-hidden ${className}`}>
+            <div ref={wrapperRef} className={`relative w-full h-full bg-black overflow-hidden ${className}`}>
                 <div
                     ref={containerRef}
                     onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
@@ -958,29 +958,25 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                     style={{ ...containerStyle, background: 'transparent' }}
                     className={`relative w-full h-full ${isCalibrating ? 'ring-2 ring-indigo-500/50' : ''}`}
                 >
-                    <div style={{ position: 'absolute', inset: 0, background: 'transparent' }}>
-                        {/* PRIMARY: WebGL2/2D canvas — starts hidden, shown imperatively on first frame */}
-                        {mjpegMode && (
-                            <canvas
-                                ref={canvasDisplayRef}
-                                className="pointer-events-none"
-                                style={{
-                                    position: 'absolute', top: 0, left: 0,
-                                    width: '100%', height: '100%',
-                                    display: 'block',
-                                    visibility: hasFrame ? 'visible' : 'hidden',
-                                    transform: mirrored ? 'scaleX(-1)' : 'none',
-                                    imageRendering: 'auto',
-                                    zIndex: 10,
-                                }}
-                            />
-                        )}
-                        {/* FALLBACK: WebRTC getUserMedia */}
-                        <video ref={videoRef} autoPlay playsInline muted
-                            className="pointer-events-none -z-10"
-                            style={{ ...videoInnerStyle, display: status === 'streaming' ? 'block' : 'none' }}
+                    {/* PRIMARY: WebGL2/2D canvas — starts hidden, shown imperatively on first frame */}
+                    {mjpegMode && (
+                        <canvas
+                            ref={canvasDisplayRef}
+                            className="pointer-events-none absolute inset-0 w-full h-full"
+                            style={{
+                                display: 'block',
+                                visibility: hasFrame ? 'visible' : 'hidden',
+                                transform: mirrored ? 'scaleX(-1)' : 'none',
+                                imageRendering: 'auto',
+                                zIndex: 10,
+                            }}
                         />
-                    </div>
+                    )}
+                    {/* FALLBACK: WebRTC getUserMedia */}
+                    <video ref={videoRef} autoPlay playsInline muted
+                        className="pointer-events-none absolute inset-0 w-full h-full z-0"
+                        style={{ ...videoInnerStyle, display: status === 'streaming' ? 'block' : 'none' }}
+                    />
 
                     {frozenFrame && (
                         <div className="absolute inset-0 z-5 bg-black flex items-center justify-center">
