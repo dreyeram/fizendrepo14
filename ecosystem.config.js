@@ -59,45 +59,6 @@ module.exports = {
             out_file: '/home/lm/loyalmed/logs/nextjs-out.log',
         },
 
-        // ── 2. Pi Capture Daemon ────────────────────────────────────────────
-        {
-            name: 'pi-capture-daemon',
-            script: './scripts/pi_capture_daemon.js',
-            interpreter: 'node',
-
-            cwd: '/home/lm/loyalmed',
-            instances: 1,
-            exec_mode: 'fork',
-
-            restart_delay: 3000,
-            max_restarts: 20,
-            kill_timeout: 5000,
-
-            env: {
-                NODE_ENV: 'production',
-
-                // ── Camera device ──────────────────────────────────────────
-                VIDEO_DEVICE: '/dev/video0',
-
-                // ── Resolution: must match a format the camera advertises ──
-                // Run: v4l2-ctl -d /dev/video0 --list-formats-ext
-                // UltraSemi USB3 Video supports: 1920x1080, 2560x1440, 640x480
-                RESOLUTION: '1920x1080',
-
-                // ── Framerate settings ──
-                // Higher values (up to 60) may be supported by certain capture devices.
-                FRAMERATE: '30',
-
-                // ── HTTP / WebSocket server port ───────────────────────────
-                // WebSocket primary endpoint: ws://localhost:5555/stream
-                // HTTP legacy endpoint:       http://localhost:5555/stream
-                PORT: '5555',
-            },
-
-            log_date_format: 'YYYY-MM-DD HH:mm:ss',
-            error_file: '/home/lm/loyalmed/logs/daemon-error.log',
-            out_file: '/home/lm/loyalmed/logs/daemon-out.log',
-        },
-
     ],
 };
+```
