@@ -13,6 +13,7 @@ export interface ProcedureSegment {
 interface SessionState {
     activePatientId: string | null;
     segments: ProcedureSegment[];
+    captures: any[];
     activeSegmentIndex: number; // The currently selected index (1-based)
 
     // Actions
@@ -21,6 +22,8 @@ interface SessionState {
     updateSegment: (index: number, updates: Partial<ProcedureSegment>) => void;
     setActiveSegment: (index: number) => void;
     updateSegmentThumbnail: (id: string, url: string) => void;
+    addCapture: (capture: any) => void;
+    setCaptures: (captures: any[] | ((prev: any[]) => any[])) => void;
     endSession: () => void;
 
     // Recovery
@@ -32,11 +35,13 @@ export const useSessionStore = create<SessionState>()(
         (set, get) => ({
             activePatientId: null,
             segments: [],
+            captures: [],
             activeSegmentIndex: 1,
 
             startSession: (patientId) => set({
                 activePatientId: patientId,
                 segments: [],
+                captures: [],
                 activeSegmentIndex: 1
             }),
 
@@ -55,9 +60,18 @@ export const useSessionStore = create<SessionState>()(
                 segments: state.segments.map(s => s.id === id ? { ...s, thumbnailUrl: url } : s)
             })),
 
+            addCapture: (capture) => set((state) => ({
+                captures: [capture, ...state.captures]
+            })),
+
+            setCaptures: (captures) => set((state) => ({
+                captures: typeof captures === 'function' ? (captures as any)(state.captures) : captures
+            })),
+
             endSession: () => set({
                 activePatientId: null,
                 segments: [],
+                captures: [],
                 activeSegmentIndex: 1
             }),
 

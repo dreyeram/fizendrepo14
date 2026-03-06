@@ -1,27 +1,17 @@
 "use client";
 
 // =============================================================================
-//  SurgicalCameraStream.tsx  ·  SURGICAL GRADE v3.1
+//  SurgicalCameraStream.tsx  ·  SIMPLIFIED v4.0
 //
-//  FIXES vs v3.0 (the black screen + WS stall issue):
+//  MAJOR SIMPLIFICATION from v3.1:
+//    - REMOVED WebGL2 shaders (Pi GPU can't handle them reliably)
+//    - REMOVED ImageDecoder / createImageBitmap JS pipeline
+//    - REPLACED with native <img> MJPEG stream (browser handles decode)
+//    - KEPT: calibration overlay, capture via /capture, recording via /record
+//    - KEPT: zoom, pan, scope shape, grid, frozen frame
 //
-//  FIX 1 — WS code 1005 detection
-//    Code 1005 = server closed cleanly with no reason. This happens when
-//    the OLD daemon (v2, no WebSocket server) accepts the HTTP upgrade
-//    handshake but then immediately closes because it has no /stream
-//    WebSocket handler. We now detect this on the first 1-2 attempts and
-//    skip WebSocket entirely, going straight to HTTP multipart.
-//
-//  FIX 2 — black screen on WS reconnect
-//    v3.0 used React state (mjpegHasFrame) to control canvas visibility.
-//    When WS reconnects, the useEffect re-runs and React re-renders reset
-//    mjpegHasFrame to false → canvas hides → black screen.
-//    v3.1 uses a ref (hasFrameRef) + imperative DOM style update.
-//    Once the canvas is shown, it stays shown through reconnects.
-//
-//  FIX 3 — HTTP multipart abort on unmount
-//    v3.0 didn't abort the fetch when the component unmounted, causing
-//    a console error. Added AbortController properly.
+//  The primary camera feed is now in a separate popup window (CameraFeedPopup).
+//  This component serves as the in-page viewfinder for scope overlay & capture.
 // =============================================================================
 
 import React, {
@@ -79,122 +69,6 @@ type DragMode =
     'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' |
     'resize-n' | 'resize-s' | 'resize-e' | 'resize-w';
 
-const MIN_CLIENT_FRAME_BYTES = 5 * 1024;
-
-// =============================================================================
-//  WebGL2 shaders
-// =============================================================================
-const VERT_GLSL = `#version 300 es
-in  vec2 aPos;
-out vec2 vUV;
-void main() {
-    vUV         = vec2(aPos.x * 0.5 + 0.5, 1.0 - (aPos.y * 0.5 + 0.5));
-    gl_Position = vec4(aPos, 0.0, 1.0);
-}`;
-
-const FRAG_GLSL = `#version 300 es
-precision highp float;
-uniform sampler2D uTex;
-uniform vec3      uWBGain;
-uniform float     uSharp;
-uniform vec2      uTexel;
-in  vec2 vUV;
-out vec4 fragColour;
-
-vec3 unsharpMask(sampler2D tex, vec2 uv, vec2 px, float strength) {
-    vec3 tl = texture(tex, uv + vec2(-px.x,  px.y)).rgb;
-    vec3 tc = texture(tex, uv + vec2( 0.0,   px.y)).rgb;
-    vec3 tr = texture(tex, uv + vec2( px.x,  px.y)).rgb;
-    vec3 ml = texture(tex, uv + vec2(-px.x,  0.0 )).rgb;
-    vec3 mc = texture(tex, uv).rgb;
-    vec3 mr = texture(tex, uv + vec2( px.x,  0.0 )).rgb;
-    vec3 bl = texture(tex, uv + vec2(-px.x, -px.y)).rgb;
-    vec3 bc = texture(tex, uv + vec2( 0.0,  -px.y)).rgb;
-    vec3 br = texture(tex, uv + vec2( px.x, -px.y)).rgb;
-    vec3 blur = (tl+tr+bl+br)*(1.0/16.0) + (tc+ml+mr+bc)*(2.0/16.0) + mc*(4.0/16.0);
-    return clamp(mc + (mc - blur) * strength, 0.0, 1.0);
-}
-
-void main() {
-    vec3 col  = unsharpMask(uTex, vUV, uTexel, uSharp);
-    col      *= uWBGain;
-    col       = clamp(col, 0.0, 1.0);
-    fragColour = vec4(col, 1.0);
-}`;
-
-const QUAD = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
-
-interface GLState {
-    gl: WebGL2RenderingContext;
-    prog: WebGLProgram;
-    tex: WebGLTexture;
-    vao: WebGLVertexArrayObject;
-    uWBGain: WebGLUniformLocation;
-    uSharp: WebGLUniformLocation;
-    uTexel: WebGLUniformLocation;
-    uTex: WebGLUniformLocation;
-}
-
-function buildGLState(canvas: HTMLCanvasElement): GLState | null {
-    const gl = canvas.getContext('webgl2', {
-        alpha: false, antialias: false, depth: false, stencil: false,
-        powerPreference: 'high-performance', preserveDrawingBuffer: false,
-    }) as WebGL2RenderingContext | null;
-    if (!gl) return null;
-
-    const compile = (type: number, src: string) => {
-        const s = gl.createShader(type)!;
-        gl.shaderSource(s, src); gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-            console.error('[WebGL2]', gl.getShaderInfoLog(s)); gl.deleteShader(s); return null;
-        }
-        return s;
-    };
-    const vert = compile(gl.VERTEX_SHADER, VERT_GLSL);
-    const frag = compile(gl.FRAGMENT_SHADER, FRAG_GLSL);
-    if (!vert || !frag) return null;
-
-    const prog = gl.createProgram()!;
-    gl.attachShader(prog, vert); gl.attachShader(prog, frag); gl.linkProgram(prog);
-    gl.deleteShader(vert); gl.deleteShader(frag);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        console.error('[WebGL2] Link error:', gl.getProgramInfoLog(prog)); return null;
-    }
-
-    const vao = gl.createVertexArray()!;
-    gl.bindVertexArray(vao);
-    const vbo = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, QUAD, gl.STATIC_DRAW);
-    const aPos = gl.getAttribLocation(prog, 'aPos');
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.bindVertexArray(null);
-
-    const tex = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-    gl.useProgram(prog);
-    const uWBGain = gl.getUniformLocation(prog, 'uWBGain')!;
-    const uSharp = gl.getUniformLocation(prog, 'uSharp')!;
-    const uTexel = gl.getUniformLocation(prog, 'uTexel')!;
-    const uTex = gl.getUniformLocation(prog, 'uTex')!;
-    gl.uniform1i(uTex, 0);
-
-    console.log('[WebGL2] ✓ Pipeline ready — VideoCore VII GPU');
-    return { gl, prog, tex, vao, uWBGain, uSharp, uTexel, uTex };
-}
-
-function destroyGLState(g: GLState) {
-    try { g.gl.deleteTexture(g.tex); } catch { }
-    try { g.gl.deleteProgram(g.prog); } catch { }
-    try { g.gl.deleteVertexArray(g.vao); } catch { }
-}
-
 // =============================================================================
 //  COMPONENT
 // =============================================================================
@@ -232,18 +106,11 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         // ── DOM refs ──────────────────────────────────────────────────────────
         const wrapperRef = useRef<HTMLDivElement>(null);
         const containerRef = useRef<HTMLDivElement>(null);
-        const canvasDisplayRef = useRef<HTMLCanvasElement>(null);
+        const imgRef = useRef<HTMLImageElement>(null);
         const canvasRef = useRef<HTMLCanvasElement | null>(null);
         const videoRef = useRef<HTMLVideoElement>(null);
         const mediaRecorderRef = useRef<MediaRecorder | null>(null);
         const recordedChunksRef = useRef<Blob[]>([]);
-        const glStateRef = useRef<GLState | null>(null);
-
-        // ── FIX 2: frame visibility controlled by refs, NOT React state ───────
-        // These refs persist through WS reconnects without triggering re-renders
-        // that would hide the canvas again.
-        const hasFrameRef = useRef(false);   // true once first frame painted
-        const canvasVisRef = useRef(false);   // tracks imperative visibility
 
         // ── React state ───────────────────────────────────────────────────────
         const [status, setStatus] = useState<StreamStatus>('connecting');
@@ -254,8 +121,8 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
         const [dragStartArea, setDragStartArea] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
         const [dragStartPan, setDragStartPan] = useState<{ x: number; y: number } | null>(null);
-        const [mjpegMode, setMjpegMode] = useState(false);
-        const [glReady, setGlReady] = useState(false);
+        const [useDaemon, setUseDaemon] = useState(false);
+        const [displayFps, setDisplayFps] = useState(0);
 
         useEffect(() => { onStatusChange?.(status); }, [status, onStatusChange]);
 
@@ -266,18 +133,16 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             const ro = new ResizeObserver((entries) => {
                 for (const e of entries) {
                     const { width, height } = e.contentRect;
-                    console.log(`[Stream] ResizeObserver: ${width}x${height}`);
                     setWrapperSize({ w: Math.round(width), h: Math.round(height) });
                 }
             });
             ro.observe(el);
             const r = el.getBoundingClientRect();
-            console.log(`[Stream] Initial size: ${r.width}x${r.height}`);
             setWrapperSize({ w: Math.round(r.width), h: Math.round(r.height) });
             return () => ro.disconnect();
         }, []);
 
-        // ── Daemon detection → WebRTC fallback ────────────────────────────────
+        // ── Daemon detection ──────────────────────────────────────────────────
         useEffect(() => {
             if (typeof window === 'undefined') return;
             let mediaStream: MediaStream | null = null;
@@ -285,7 +150,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
 
             const init = async () => {
                 const host = window.location.hostname || 'localhost';
-                const MAX = 30, GRACE = 5;
+                const MAX = 15, GRACE = 3;
                 let seen = false;
 
                 for (let i = 1; i <= MAX; i++) {
@@ -296,8 +161,8 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                             seen = true;
                             const d = await r.json();
                             if (d.status === 'streaming' || d.status === 'waiting') {
-                                console.log(`[Camera] Daemon ${d.status} (${d.mode ?? '?'}) — activating MJPEG/WS mode`);
-                                if (active) { setMjpegMode(true); setStatus('connected'); }
+                                console.log(`[Camera] Daemon ${d.status} (${d.mode ?? '?'}) — using native MJPEG <img>`);
+                                if (active) { setUseDaemon(true); setStatus('connected'); }
                                 return;
                             }
                         }
@@ -305,11 +170,12 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                         if (!seen && i >= GRACE) { console.log('[Camera] No daemon — WebRTC fallback'); break; }
                         console.log(`[Camera] Daemon attempt ${i}/${MAX}...`);
                     }
-                    if (i < MAX && active) await new Promise(r => setTimeout(r, 2000));
+                    if (i < MAX && active) await new Promise(r => setTimeout(r, 1500));
                 }
 
-                if (seen && active) { setMjpegMode(true); setStatus('connected'); return; }
+                if (seen && active) { setUseDaemon(true); setStatus('connected'); return; }
 
+                // WebRTC fallback for local development
                 try {
                     if (!navigator.mediaDevices?.getUserMedia) { if (active) setStatus('fallback'); return; }
                     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -326,263 +192,57 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             return () => { active = false; mediaStream?.getTracks().forEach(t => t.stop()); };
         }, [deviceId, resolution]);
 
-        // ── PRIMARY STREAM EFFECT ─────────────────────────────────────────────
+        // ── Native <img> MJPEG stream setup ───────────────────────────────────
         useEffect(() => {
-            if (!mjpegMode) return;
-            const canvas = canvasDisplayRef.current;
-            if (!canvas) return;
+            if (!useDaemon) return;
+            const img = imgRef.current;
+            if (!img) return;
 
             const host = window.location.hostname || 'localhost';
 
-            // WebGL2 init
-            let use2D = false;
-            if (enhancement) {
-                const g = buildGLState(canvas);
-                if (g) { glStateRef.current = g; setGlReady(true); }
-                else { use2D = true; console.warn('[WebGL2] Not available — 2D canvas'); }
-            } else { use2D = true; }
-
-            const ctx2d = use2D ? canvas.getContext('2d') : null;
-
-            let active = true;
-            let rafId = 0;
-            let retryDelay = 1000;
-            let ws: WebSocket | null = null;
-            let wsWorked = false;   // true once WS delivers at least one real frame
-            let wsAttempts = 0;
-            let httpAbort: AbortController | null = null;
-
-            let pendingFrame: ImageBitmap | null = null;
-
-            // ── Imperatively show canvas — survives React re-renders ──────────
-            const showCanvas = () => {
-                if (canvasVisRef.current) return; // already visible
-                const c = canvasDisplayRef.current;
-                if (c) { c.style.visibility = 'visible'; canvasVisRef.current = true; }
-            };
-
-            // ── RAF vsync paint loop ──────────────────────────────────────────
-            const paint = () => {
-                if (!active) return;
-                rafId = requestAnimationFrame(paint);
-                if (!pendingFrame) return;
-                const bm = pendingFrame; pendingFrame = null;
-                const w = bm.width, h = bm.height;
-
-                if (use2D && ctx2d) {
-                    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-                    ctx2d.drawImage(bm, 0, 0);
-                } else {
-                    const g = glStateRef.current;
-                    if (g) {
-                        const { gl, prog, tex, vao, uWBGain, uSharp, uTexel } = g;
-                        if (canvas.width !== w || canvas.height !== h) {
-                            canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h);
-                        }
-                        gl.bindTexture(gl.TEXTURE_2D, tex);
-                        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bm);
-                        gl.useProgram(prog);
-                        gl.uniform3f(uWBGain, whiteBalance.r, whiteBalance.g, whiteBalance.b);
-                        gl.uniform1f(uSharp, sharpening);
-                        gl.uniform2f(uTexel, 1.0 / w, 1.0 / h);
-                        gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 6); gl.bindVertexArray(null);
-                    }
-                }
-                bm.close();
-            };
-            rafId = requestAnimationFrame(paint);
-
-            const hasImageDecoder = typeof (window as any).ImageDecoder !== 'undefined';
-            console.log(`[Stream] Decoder: ${hasImageDecoder ? 'ImageDecoder API (GPU thread) ✓' : 'createImageBitmap'}`);
-
-            // ── Decode JPEG → ImageBitmap ─────────────────────────────────────
-            const decodeJpeg = (data: ArrayBuffer) => {
-                const onDecoded = (bm: ImageBitmap) => {
-                    if (!active) { bm.close?.(); return; }
-                    if (pendingFrame) pendingFrame.close();
-                    pendingFrame = bm;
-                    if (!hasFrameRef.current) {
-                        hasFrameRef.current = true;
-                        setHasFrame(true);
-                        setStatus('connected');
-                        showCanvas();
-                        console.log('[Stream] ✓ First frame — surgical-grade live');
-                    }
-                };
-
-                if (hasImageDecoder) {
-                    const dec = new (window as any).ImageDecoder({
-                        type: 'image/jpeg',
-                        data: data,
-                    });
-                    dec.decode().then(({ image }: { image: ImageBitmap }) => onDecoded(image)).catch((err: any) => {
-                        console.error('[Stream] ImageDecoder failed, trying fallback:', err);
-                        const blob = new Blob([data], { type: 'image/jpeg' });
-                        createImageBitmap(blob).then(onDecoded).catch(e => console.error('[Stream] Fallback decoder also failed:', e));
-                    });
-                } else {
-                    const blob = new Blob([data], { type: 'image/jpeg' });
-                    createImageBitmap(blob).then(onDecoded).catch(err => console.error('[Stream] createImageBitmap failed:', err));
+            const onLoad = () => {
+                if (!hasFrame) {
+                    setHasFrame(true);
+                    setStatus('connected');
+                    console.log('[Stream] ✓ First frame via native <img> MJPEG — zero-processing live');
                 }
             };
 
-            // ── HTTP multipart fallback ───────────────────────────────────────
-            const connectHTTP = async () => {
-                if (!active) return;
-                console.log('[Stream] HTTP multipart → /stream');
-                httpAbort = new AbortController();
-                let res: Response;
-                try {
-                    res = await fetch(`http://${host}:5555/stream`, { signal: httpAbort.signal });
-                } catch (e: any) {
-                    if (e?.name === 'AbortError') return;
-                    if (active) setTimeout(connectHTTP, retryDelay);
-                    return;
-                }
-                if (!res.ok || !res.body) { if (active) setTimeout(connectHTTP, retryDelay); return; }
-
-                const reader = res.body.getReader();
-                const SOI = [0xFF, 0xD8], EOI = [0xFF, 0xD9];
-                let buf = new Uint8Array(0);
-
-                const indexOf = (h: Uint8Array, n: number[], from: number): number => {
-                    outer: for (let i = from; i <= h.length - n.length; i++) {
-                        for (let j = 0; j < n.length; j++) if (h[i + j] !== n[j]) continue outer;
-                        return i;
+            const onError = () => {
+                console.warn('[Stream] <img> stream error — retrying in 2s');
+                setTimeout(() => {
+                    if (imgRef.current) {
+                        imgRef.current.src = `http://${host}:5555/stream?t=${Date.now()}`;
                     }
-                    return -1;
-                };
-
-                try {
-                    while (active) {
-                        const { value, done } = await reader.read();
-                        if (done || !active) break;
-                        if (value) {
-                            const m = new Uint8Array(buf.length + value.length);
-                            m.set(buf); m.set(value, buf.length); buf = m;
-                        }
-                        while (true) {
-                            const s = indexOf(buf, SOI, 0);
-                            if (s === -1) { buf = new Uint8Array(0); break; }
-                            if (s > 0) buf = buf.slice(s);
-                            const e = indexOf(buf, EOI, 2);
-                            if (e === -1) break;
-                            const jpeg = buf.slice(0, e + 2);
-                            buf = buf.slice(e + 2);
-                            if (jpeg.length >= MIN_CLIENT_FRAME_BYTES) decodeJpeg(jpeg.buffer as ArrayBuffer);
-                        }
-                        if (buf.length > 10 * 1024 * 1024) buf = buf.slice(buf.length - 1024 * 1024);
-                    }
-                } catch { /* stream interrupted */ } finally {
-                    reader.releaseLock();
-                    if (active) {
-                        retryDelay = Math.min(retryDelay * 2, 8000);
-                        setTimeout(connectHTTP, retryDelay);
-                    }
-                }
+                }, 2000);
             };
 
-            // ── WebSocket ─────────────────────────────────────────────────────
-            const connectWS = () => {
-                if (!active) return;
-                wsAttempts++;
-                const url = _wsUrl || `ws://${host}:5555/stream`;
-                console.log(`[Stream] WS → ${url} (attempt ${wsAttempts})`);
+            img.addEventListener('load', onLoad);
+            img.addEventListener('error', onError);
 
-                try {
-                    ws = new WebSocket(url);
-                } catch (e) {
-                    console.error('[Stream] WS constructor failed:', e);
-                    if (active) connectHTTP();
-                    return;
-                }
-                ws.binaryType = 'arraybuffer';
-
-                ws.onopen = () => { console.log('[Stream] WS connected ✓'); retryDelay = 1000; };
-
-                ws.onmessage = (evt) => {
-                    if (!active) return;
-                    if (!(evt.data instanceof ArrayBuffer)) {
-                        console.warn('[Stream] Received non-binary WS message:', typeof evt.data);
-                        return;
-                    }
-                    if (evt.data.byteLength < MIN_CLIENT_FRAME_BYTES) {
-                        console.warn(`[Stream] WS frame too small: ${evt.data.byteLength} bytes`);
-                        return;
-                    }
-                    if (!wsWorked) console.log(`[Stream] Got first frame via WS: ${evt.data.byteLength} bytes`);
-                    wsWorked = true;
-                    decodeJpeg(evt.data);
-                };
-
-                ws.onclose = (e) => {
-                    ws = null;
-                    if (!active) return;
-
-                    // ── FIX 1: Detect old daemon (no WS server) ───────────────
-                    // Code 1005 = server closed with no status code.
-                    // This is exactly what happens when the OLD v2 daemon
-                    // accepts the WebSocket upgrade but has no handler.
-                    // After 2 attempts with no frames, give up on WS.
-                    if (e.code === 1005 && !wsWorked && wsAttempts <= 2) {
-                        console.warn('[Stream] WS 1005 — daemon has no WS server (old v2?). Using HTTP multipart.');
-                        connectHTTP();
-                        return;
-                    }
-
-                    // Normal transient disconnect — reconnect with backoff
-                    const delay = retryDelay;
-                    retryDelay = Math.min(retryDelay * 2, 8000);
-                    console.warn(`[Stream] WS closed (${e.code}) — retry in ${delay}ms`);
-                    setTimeout(connectWS, delay);
-                };
-
-                ws.onerror = () => { /* onclose always follows */ };
-            };
-
-            connectWS();
-
-            // Safety: if no frame after 6s, switch to HTTP multipart regardless
-            const fallbackTimer = setTimeout(() => {
-                if (!hasFrameRef.current && active) {
-                    console.warn('[Stream] No frame after 6s — forcing HTTP multipart');
-                    ws?.close(); ws = null;
-                    connectHTTP();
-                }
-            }, 6000);
+            // Start the stream
+            img.src = `http://${host}:5555/stream`;
 
             return () => {
-                active = false;
-                clearTimeout(fallbackTimer);
-                cancelAnimationFrame(rafId);
-                ws?.close(); ws = null;
-                httpAbort?.abort();
-                if (pendingFrame) { pendingFrame.close(); pendingFrame = null; }
-                if (glStateRef.current) { destroyGLState(glStateRef.current); glStateRef.current = null; }
+                img.removeEventListener('load', onLoad);
+                img.removeEventListener('error', onError);
+                img.src = '';
             };
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [mjpegMode, enhancement]);
-
-        // ── Live WebGL uniform updates (no context recreation) ────────────────
-        useEffect(() => {
-            const g = glStateRef.current;
-            if (!g) return;
-            const { gl, prog, uWBGain, uSharp } = g;
-            gl.useProgram(prog);
-            gl.uniform3f(uWBGain, whiteBalance.r, whiteBalance.g, whiteBalance.b);
-            gl.uniform1f(uSharp, sharpening);
-        }, [whiteBalance, sharpening]);
+        }, [useDaemon, hasFrame]);
 
         // ── Daemon FPS + resolution polling ───────────────────────────────────
         useEffect(() => {
-            if (!mjpegMode) return;
+            if (!useDaemon) return;
             const host = window.location.hostname || 'localhost';
             const poll = async () => {
                 try {
                     const r = await fetch(`http://${host}:5555/status`, { signal: AbortSignal.timeout(1500) });
                     if (!r.ok) return;
                     const d = await r.json();
-                    if (typeof d.fps === 'number') onFpsUpdate?.(d.fps);
+                    if (typeof d.fps === 'number') {
+                        setDisplayFps(d.fps);
+                        onFpsUpdate?.(d.fps);
+                    }
                     if (typeof d.resolution === 'string') {
                         const p = d.resolution.split('x').map(Number);
                         if (p.length === 2 && !isNaN(p[0])) onResolutionChange?.(p[0], p[1]);
@@ -592,7 +252,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             poll();
             const t = setInterval(poll, 2000);
             return () => clearInterval(t);
-        }, [mjpegMode, onFpsUpdate, onResolutionChange]);
+        }, [useDaemon, onFpsUpdate, onResolutionChange]);
 
         // ── Arrow key calibration ─────────────────────────────────────────────
         useEffect(() => {
@@ -766,6 +426,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             }
         }, [zoom, hardwareZoom]);
 
+        // ── Hardware zoom via PTZ ──────────────────────────────────────────────
         useEffect(() => {
             if (!hardwareZoom) return;
             const host = window.location.hostname || 'localhost';
@@ -793,11 +454,13 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         }, [captureArea, aspectRatioCorrection, activeShape]);
 
         const doCapture = useCallback(async (): Promise<string | null> => {
+            // WebRTC mode: draw from video element
             if (status === 'streaming' && videoRef.current) {
                 const c = document.createElement('canvas'); c.width = videoRef.current.videoWidth || 1920; c.height = videoRef.current.videoHeight || 1080;
                 const ctx = c.getContext('2d'); if (ctx) ctx.drawImage(videoRef.current, 0, 0, c.width, c.height);
                 return cropAndMask(c, c.width, c.height).toDataURL('image/png', 1.0);
             }
+            // Daemon mode: use /capture endpoint for clean JPEG
             try {
                 let baseUrl = `http://${window.location.hostname || 'localhost'}:5555`;
                 if (_wsUrl) {
@@ -862,7 +525,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                 });
             }
             return null;
-        }, []);
+        }, [_wsUrl]);
 
         useImperativeHandle(ref, () => ({ getCanvas: () => null, captureFrame: doCapture, startRecording, stopRecording, getStatus: () => status, getLiveCanvas: () => canvasRef.current }));
 
@@ -945,13 +608,17 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             );
         };
 
-        const renderGPUBadge = () => {
-            if (!glReady || !enhancement) return null;
+        const renderStatusBadge = () => {
             return (
                 <div className="absolute top-6 left-6 z-[80] pointer-events-none">
                     <div className="flex items-center gap-2 px-2.5 py-1.5 bg-black/40 backdrop-blur-md border border-emerald-500/20 rounded-xl shadow-lg">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        <span className="text-[9px] font-bold text-emerald-300 uppercase tracking-widest leading-none">GPU Enhanced</span>
+                        <div className={`w-1.5 h-1.5 rounded-full ${hasFrame ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                        <div className="flex items-center gap-1.5 h-full">
+                            <span className="text-[9px] font-bold text-emerald-300 uppercase tracking-widest leading-none">
+                                {hasFrame ? 'Live' : 'Connecting'}
+                                {displayFps > 0 && <span className="ml-2 text-white/50">{displayFps} FPS</span>}
+                            </span>
+                        </div>
                     </div>
                 </div>
             );
@@ -967,17 +634,19 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                     style={{ ...containerStyle, background: 'transparent' }}
                     className={`relative w-full h-full ${isCalibrating ? 'ring-2 ring-indigo-500/50' : ''}`}
                 >
-                    {/* PRIMARY: WebGL2/2D canvas — starts hidden, shown imperatively on first frame */}
-                    {mjpegMode && (
-                        <canvas
-                            ref={canvasDisplayRef}
+                    {/* PRIMARY: Native <img> MJPEG stream — browser handles decode */}
+                    {useDaemon && (
+                        <img
+                            ref={imgRef}
+                            alt="Camera Feed"
                             className="pointer-events-none absolute inset-0 w-full h-full"
                             style={{
-                                display: 'block',
-                                visibility: hasFrame ? 'visible' : 'hidden',
+                                display: hasFrame ? 'block' : 'none',
+                                objectFit: 'contain',
                                 transform: mirrored ? 'scaleX(-1)' : 'none',
                                 imageRendering: 'auto',
                                 zIndex: 10,
+                                ...videoInnerStyle,
                             }}
                         />
                     )}
@@ -986,6 +655,16 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                         className="pointer-events-none absolute inset-0 w-full h-full z-0"
                         style={{ ...videoInnerStyle, display: status === 'streaming' ? 'block' : 'none' }}
                     />
+
+                    {/* Loading state */}
+                    {!hasFrame && status !== 'streaming' && (
+                        <div className="absolute inset-0 flex items-center justify-center z-5">
+                            <div className="flex flex-col items-center gap-3">
+                                <div className="w-8 h-8 border-2 border-white/10 border-t-emerald-500 rounded-full animate-spin" />
+                                <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Connecting to camera...</span>
+                            </div>
+                        </div>
+                    )}
 
                     {frozenFrame && (
                         <div className="absolute inset-0 z-5 bg-black flex items-center justify-center">
@@ -1020,7 +699,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                     {renderCalibrationOverlay()}
                 </div>
                 {renderZoomBadge()}
-                {renderGPUBadge()}
+                {renderStatusBadge()}
             </div>
         );
     }

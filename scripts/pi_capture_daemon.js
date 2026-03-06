@@ -60,6 +60,10 @@ const [CAM_W, CAM_H] = RESOLUTION.split('x').map(Number);
 const MIN_FRAME_BYTES = 5 * 1024;
 const MAX_PARSE_BUF = 20 * 1024 * 1024;
 
+// Auto-detected input format (default: mjpeg, fallback: yuyv422 with re-encode)
+let inputFormat = 'mjpeg';
+let needsReencode = false;
+
 // ── State ───────────────────────────────────────────────────────────────────
 let latestFrame = null;
 let ffmpegProc = null;
@@ -126,14 +130,18 @@ function startCapture() {
     ffmpegProc = spawn('ffmpeg', [
         '-loglevel', 'error',
         '-f', 'v4l2',
-        '-input_format', 'mjpeg',
+        '-input_format', inputFormat,
         '-video_size', `${CAM_W}x${CAM_H}`,
         '-framerate', String(FRAMERATE),
         '-probesize', '32',
         '-analyzeduration', '0',
         '-use_wallclock_as_timestamps', '1',
         '-i', VIDEO_DEVICE,
-        '-c:v', 'copy',
+        // If camera outputs raw (yuyv), re-encode to mjpeg; otherwise copy
+        ...(needsReencode
+            ? ['-c:v', 'mjpeg', '-q:v', '2']
+            : ['-c:v', 'copy']
+        ),
         '-fflags', '+nobuffer+discardcorrupt+flush_packets',
         '-avioflags', '+direct',
         '-flush_packets', '1',
@@ -198,7 +206,36 @@ function startCapture() {
     });
 }
 
-startCapture();
+// ── Camera format auto-detection ─────────────────────────────────────────────
+function detectAndStart() {
+    if (!fs.existsSync(VIDEO_DEVICE)) {
+        console.log(`[Boot] ${VIDEO_DEVICE} not found — waiting...`);
+        setTimeout(detectAndStart, 2000);
+        return;
+    }
+
+    exec(`v4l2-ctl -d ${VIDEO_DEVICE} --list-formats-ext 2>/dev/null`, (err, stdout) => {
+        if (!err && stdout) {
+            const formats = stdout.toLowerCase();
+            if (formats.includes('mjpeg') || formats.includes('motion-jpeg')) {
+                inputFormat = 'mjpeg';
+                needsReencode = false;
+                console.log('[Boot] Camera supports MJPEG — using direct copy (zero latency)');
+            } else if (formats.includes('yuyv') || formats.includes('yuv')) {
+                inputFormat = 'yuyv422';
+                needsReencode = true;
+                console.log('[Boot] Camera outputs YUYV — will re-encode to MJPEG');
+            } else {
+                console.log('[Boot] Unknown camera format, trying mjpeg anyway');
+            }
+        } else {
+            console.log('[Boot] v4l2-ctl not available or failed, using default mjpeg');
+        }
+        startCapture();
+    });
+}
+
+detectAndStart();
 
 // =============================================================================
 //  HTTP SERVER
@@ -262,17 +299,29 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // ── /stream  (legacy HTTP multipart — backward compat) ────────────────
+    // ── /stream  (HTTP multipart — used by popup <img> and legacy) ────────
     if (p === '/stream') {
         res.writeHead(200, {
             'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
             'Cache-Control': 'no-cache, no-store',
             'Connection': 'keep-alive',
+            'X-Content-Type-Options': 'nosniff',
         });
         if (latestFrame) { try { res.write(buildMjpegPart(latestFrame)); } catch { } }
         const onF = (f) => { try { res.write(buildMjpegPart(f)); } catch { frameEmitter.removeListener('frame', onF); } };
         frameEmitter.on('frame', onF);
         req.on('close', () => frameEmitter.removeListener('frame', onF));
+        return;
+    }
+
+    // ── /stream-page  (standalone HTML page for popup window) ──────────────
+    if (p === '/stream-page') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Live Camera</title>
+<style>*{margin:0;padding:0}html,body{width:100%;height:100%;background:#000;overflow:hidden}
+img{width:100%;height:100%;object-fit:contain}</style></head>
+<body><img src="http://0.0.0.0:${HTTP_PORT}/stream" alt="Live Feed"></body></html>`);
         return;
     }
 

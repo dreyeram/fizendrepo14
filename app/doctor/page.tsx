@@ -79,6 +79,7 @@ export default function DoctorPage() {
 
     // Layout State
     const [layoutFocus, setLayoutFocus] = useState<'left' | 'right' | 'both'>('both');
+    const [lastValidProcId, setLastValidProcId] = useState<string | null>(null);
 
     // Import State
     const [pendingImportFiles, setPendingImportFiles] = useState<File[]>([]);
@@ -219,6 +220,7 @@ export default function DoctorPage() {
 
     // C. Start Procedure (Manual "Play" Button)
     const handleStartProcedure = async (patient: any, procedureId?: string) => {
+        console.log("[DoctorPage] handleStartProcedure called for patient:", patient.id, "procedureId:", procedureId);
         // 1. Resolve doctor ID — try state, then DOCTOR-role user, then current session user
         let currentDoctorId = doctorId;
         if (!currentDoctorId) {
@@ -306,6 +308,7 @@ export default function DoctorPage() {
         });
 
         // 4. Only NOW transition to procedure mode
+        console.log("[DoctorPage] Transitioning to procedure mode for procId:", activeProcId);
         setMode('procedure');
     };
 
@@ -481,6 +484,14 @@ export default function DoctorPage() {
 
     // --- Render Logic ---
 
+    // Track last valid ID to prevent unmounting flicker
+    useEffect(() => {
+        const activeSegment = segments.find(s => s.index === activeSegmentIndex);
+        if (activeSegment?.id) {
+            setLastValidProcId(activeSegment.id);
+        }
+    }, [segments, activeSegmentIndex]);
+
     // 1. Session View (Procedure Mode + Segment Controller)
     if (mode === 'procedure' && activePatient) {
         const activeSegment = segments.find(s => s.index === activeSegmentIndex);
@@ -488,29 +499,20 @@ export default function DoctorPage() {
 
         return (
             <div className="relative w-full h-screen bg-black overflow-hidden intro-fade-in">
-                {/* 
-                  [Relocated] SegmentController was removed from here.
-                  It is now inside ProcedureMode's sidebar.
-                */}
-
-                {/* Procedure Mode (Camera) */}
-                {/* Procedure Mode (Camera) */}
-                {/* 
-                  FIX: Use effectiveProcId (derived below) to prevent unmounting flicker 
-                  during rapid segment switching or async store updates.
-                */}
                 {(() => {
                     // Logic to maintain the last valid ID if the new one is temporarily missing
                     // This prevents the "Initializing..." flash when switching tabs.
-                    // Note: We prefer the live currentProcId if available.
-                    const displayId = currentProcId;
+                    const displayId = currentProcId || lastValidProcId;
 
                     if (displayId) {
                         return (
                             <ProcedureMode
+                                key={displayId} // Explicitly key by procedure ID to reset on real changes
                                 procedureId={displayId}
                                 patient={activePatient}
                                 onBack={async () => {
+                                    setLastValidProcId(null);
+                                    console.log("[DoctorPage] onBack callback from ProcedureMode. displayId:", displayId);
                                     // User explicitly exiting — use exitProcedure for context-aware status
                                     try {
                                         await exitProcedure(displayId);
@@ -523,6 +525,7 @@ export default function DoctorPage() {
                                     setQueueRefreshKey(prev => prev + 1);
                                 }}
                                 onGenerateReport={(captures) => {
+                                    setLastValidProcId(null);
                                     setReportCaptures(captures);
                                     setMode('annotate');
                                 }}
@@ -533,7 +536,7 @@ export default function DoctorPage() {
                         return (
                             <div className="flex flex-col items-center justify-center h-full text-white/50 gap-4">
                                 <Loader2 className="w-10 h-10 animate-spin" />
-                                <p className="text-sm font-medium uppercase tracking-widest">Initializing Segment...</p>
+                                <p className="text-sm font-medium uppercase tracking-widest">Initializing Session...</p>
                             </div>
                         );
                     }
