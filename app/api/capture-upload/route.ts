@@ -20,7 +20,7 @@ export const config = {
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { procedureId, data, type, filename } = body;
+        const { procedureId, data, type, filename, scopeShape } = body;
 
         if (!procedureId || !data) {
             return NextResponse.json(

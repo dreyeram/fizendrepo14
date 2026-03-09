@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Play, Users, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle } from "lucide-react";
+import { Search, Play, Users, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
 import { exportPatientsAction } from "@/app/actions/export";
 import { cn } from "@/lib/utils";
@@ -12,12 +12,13 @@ interface PatientQueueProps {
     onStartProcedure: (patient: any, procedureId?: string) => void;
     onStartAnnotate?: (patient: any, procedure: any) => void;
     onEditReport?: (patient: any, procedure: any) => void;
+    onEndAndAnnotate?: (patient: any, procedure: any) => void;
     onImport: () => void;
     onEdit: (patient: any) => void;
     refreshKey?: number;
 }
 
-export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onImport, onEdit, refreshKey }: PatientQueueProps) {
+export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onEndAndAnnotate, onImport, onEdit, refreshKey }: PatientQueueProps) {
     const [patients, setPatients] = useState<any[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [searchQuery, setSearchQuery] = useState("");
@@ -573,18 +574,33 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                     <div className="text-[9px] text-slate-400 font-medium mt-0.5">{new Date(proc.updatedAt || proc.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
                                                                                 </td>
                                                                                 <td className="px-4 py-3">
-                                                                                    <button
-                                                                                        onClick={actionHandler}
-                                                                                        disabled={!actionHandler}
-                                                                                        className={cn(
-                                                                                            "px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all border w-full max-w-[140px]",
-                                                                                            statusColor,
-                                                                                            !actionHandler && "cursor-default"
+                                                                                    <div className="flex flex-col gap-1.5 w-full max-w-[140px]">
+                                                                                        <button
+                                                                                            onClick={actionHandler}
+                                                                                            disabled={!actionHandler}
+                                                                                            className={cn(
+                                                                                                "px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all border w-full",
+                                                                                                statusColor,
+                                                                                                !actionHandler && "cursor-default"
+                                                                                            )}
+                                                                                        >
+                                                                                            {statusIcon}
+                                                                                            {statusLabel}
+                                                                                        </button>
+
+                                                                                        {proc.status === 'IN_PROGRESS' && (
+                                                                                            <button
+                                                                                                onClick={(e) => {
+                                                                                                    e.stopPropagation();
+                                                                                                    if (onEndAndAnnotate) onEndAndAnnotate(patient, proc);
+                                                                                                }}
+                                                                                                className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-tight flex items-center justify-center gap-1 transition-all border border-blue-200 bg-white text-blue-600 hover:bg-blue-50 shadow-sm"
+                                                                                            >
+                                                                                                <ArrowRight size={8} />
+                                                                                                End & Annotate
+                                                                                            </button>
                                                                                         )}
-                                                                                    >
-                                                                                        {statusIcon}
-                                                                                        {statusLabel}
-                                                                                    </button>
+                                                                                    </div>
                                                                                 </td>
                                                                                 <td className="px-4 py-3 text-right">
                                                                                     <div className="flex items-center justify-end">

@@ -208,6 +208,7 @@ export async function saveMediaMetadata(data: {
     type: string;
     filePath: string;
     originId?: string;
+    scopeShape?: string;
     timestamp?: Date;
 }) {
     try {
@@ -232,6 +233,7 @@ export async function saveMediaMetadata(data: {
                 type: data.type,
                 filePath: data.filePath,
                 originId: data.originId,
+                scopeShape: data.scopeShape,
                 timestamp: data.timestamp || new Date(),
             },
         });
@@ -272,7 +274,8 @@ export async function getProcedureMedia(procedureId: string) {
                 timestamp: m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
                 type: frontendType as 'image' | 'video',
                 category: category as 'raw' | 'report' | 'other',
-                originId: m.originId || undefined
+                originId: m.originId || undefined,
+                scopeShape: m.scopeShape || undefined
             };
         });
 
@@ -316,11 +319,13 @@ export async function saveReport(data: {
             },
         });
 
-        // 3. Mark procedure as COMPLETED
-        await prisma.procedure.update({
-            where: { id: data.procedureId },
-            data: { status: 'COMPLETED' }
-        });
+        // 3. Only mark procedure as COMPLETED when report is finalized
+        if (data.isFinalized) {
+            await prisma.procedure.update({
+                where: { id: data.procedureId },
+                data: { status: 'COMPLETED' }
+            });
+        }
 
         // 4. Force revalidation of all potential routes
         revalidatePath('/doctor');
@@ -459,7 +464,9 @@ export async function getPatientDetails(patientId: string) {
                 id: m.id,
                 type: m.type,
                 filePath: m.filePath,
-                timestamp: m.timestamp
+                timestamp: m.timestamp,
+                originId: m.originId || null,
+                scopeShape: m.scopeShape || null
             }))
         }));
 

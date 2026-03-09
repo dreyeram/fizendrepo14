@@ -57,10 +57,12 @@ export interface ProcedureToolPanelProps {
     onSelectComparisonImage: (url: string | null, isHistory?: boolean) => void;
     onBack: () => void;
     onEndProcedure: () => void;
+    duration?: string;
     historyExpanded?: boolean;
     setHistoryExpanded?: (v: boolean) => void;
     settings: any;
     updateSetting: (key: any, value: any) => void;
+    onOpenScopeSettings?: () => void;
 }
 
 export default function ProcedureToolPanel({
@@ -74,7 +76,7 @@ export default function ProcedureToolPanel({
     segments, activeSegmentIndex, onSetActiveSegment, onAddSegment,
     captures, onOpenStudio, onPlayVideo,
     history, comparisonImage, onSelectComparisonImage,
-    onBack, onEndProcedure,
+    onBack, onEndProcedure, onOpenScopeSettings,
 }: ProcedureToolPanelProps) {
     const [activeView, setActiveView] = useState<"images" | "videos">("images");
     const [historyTabs, setHistoryTabs] = useState<{ [procedureId: string]: "image" | "video" | "report" }>({});
@@ -125,6 +127,18 @@ export default function ProcedureToolPanel({
                             >
                                 <ArrowLeft size={16} />
                             </button>
+                            {zoom > 1.01 && (
+                                <motion.div
+                                    initial={{ opacity: 0, scale: 0.8 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 0.8 }}
+                                    className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 shadow-[0_0_14px_rgba(234,179,8,0.35)] backdrop-blur-md"
+                                >
+                                    <span className="text-[10px] font-black text-amber-300 tabular-nums tracking-wide">
+                                        {(zoom || 1).toFixed(2)}x
+                                    </span>
+                                </motion.div>
+                            )}
                         </div>
 
                         {/* CENTER: Timer */}
@@ -141,14 +155,25 @@ export default function ProcedureToolPanel({
                             </div>
                         </div>
 
-                        {/* RIGHT: End Button */}
-                        <button
-                            onClick={onEndProcedure}
-                            className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/50"
-                        >
-                            <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
-                            <span>End</span>
-                        </button>
+                        {/* RIGHT: Scope Settings & End Button */}
+                        <div className="flex items-center gap-3">
+                            {onOpenScopeSettings && (
+                                <button
+                                    onClick={onOpenScopeSettings}
+                                    className="h-9 px-3 rounded-xl bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 font-bold text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-lg shadow-indigo-500/10 transition-all active:scale-95 border border-indigo-500/30"
+                                    title="Open Scope Settings"
+                                >
+                                    <Settings2 size={14} />
+                                </button>
+                            )}
+                            <button
+                                onClick={onEndProcedure}
+                                className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/50"
+                            >
+                                <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
+                                <span>End</span>
+                            </button>
+                        </div>
                     </div>
 
                     {/* ROW 2: Patient Info & Session Tabs */}
@@ -302,7 +327,7 @@ export default function ProcedureToolPanel({
                     {/* Scope Zoom Control */}
                     <div className="mb-4 px-5 py-3 rounded-xl bg-white/[0.03] border border-white/5 transition-all">
                         <div className="flex items-center justify-between mb-2.5">
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
                                 <span className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em]">Scope Zoom</span>
                                 <button
                                     onClick={() => onZoomChange(1)}

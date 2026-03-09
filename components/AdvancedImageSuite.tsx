@@ -88,6 +88,7 @@ export interface Capture {
     deleted?: boolean;
     procedureId?: string; // Added to track which procedure this belongs to
     originId?: string; // ID of the original image this was edited from
+    scopeShape?: string | null; // Track the scope shape used for the capture (circle/square)
 }
 
 interface AdvancedImageSuiteProps {
@@ -374,7 +375,8 @@ export default function AdvancedImageSuite({
                             type: m.type as 'image' | 'video',
                             category: m.category || 'raw',
                             procedureId: seg.id,
-                            originId: m.originId || undefined
+                            originId: m.originId || undefined,
+                            scopeShape: m.scopeShape || null
                         }));
                         allFetched = [...allFetched, ...mapped];
                     }
@@ -1667,13 +1669,13 @@ export default function AdvancedImageSuite({
                                 <AlertCircle size={40} className="text-amber-500" />
                             </div>
                             <div className="space-y-2">
-                                <h2 className="text-xl font-black uppercase tracking-tighter">Fewer than 4 Images</h2>
-                                <p className="text-zinc-400 text-[12px] font-medium leading-relaxed">
+                                <h2 className="text-2xl font-semibold tracking-tight text-white">Fewer than 4 Images</h2>
+                                <p className="text-zinc-400 text-sm font-normal leading-relaxed">
                                     You have selected fewer than 4 images. A standard report typically includes 4 images. Do you want to proceed anyway?
                                 </p>
                             </div>
                             <div className="grid grid-cols-2 gap-4 w-full pt-4">
-                                <button onClick={() => setShowImageWarning(false)} className="h-14 rounded-2xl bg-white/5 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-all">Cancel</button>
+                                <button onClick={() => setShowImageWarning(false)} className="h-14 rounded-2xl bg-white/5 border border-white/10 text-white text-xs font-bold uppercase tracking-wider hover:bg-white/10 transition-all">Cancel</button>
                                 <button
                                     onClick={() => {
                                         setShowImageWarning(false);
@@ -1682,7 +1684,7 @@ export default function AdvancedImageSuite({
                                             onGenerateReport(finalSelections.map(c => c.id), selectedReportTemplates, finalSelections);
                                         }
                                     }}
-                                    className="h-14 rounded-2xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 transition-all shadow-xl shadow-amber-900/20"
+                                    className="h-14 rounded-2xl bg-amber-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-amber-500 transition-all shadow-xl shadow-amber-900/20"
                                 >
                                     Proceed
                                 </button>
@@ -1708,16 +1710,16 @@ export default function AdvancedImageSuite({
                                     <AlertCircle size={40} className="text-amber-500" />
                                 </div>
                                 <div className="space-y-2">
-                                    <h2 className="text-xl font-black uppercase tracking-tighter">Exit Annotation Mode?</h2>
-                                    <p className="text-zinc-400 text-[12px] font-medium leading-relaxed">
+                                    <h2 className="text-2xl font-semibold tracking-tight text-white">Exit Annotation Mode?</h2>
+                                    <p className="text-zinc-400 text-sm font-normal leading-relaxed">
                                         {hasUnsavedChanges
                                             ? "You have unsaved edits. Exiting now will discard unsaved annotations and return you to the patient queue."
                                             : "Are you sure you want to return to the patient dashboard?"}
                                     </p>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4 w-full pt-4">
-                                    <button onClick={() => setShowHomeWarning(false)} className="h-14 rounded-2xl bg-white/5 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-all">Cancel</button>
-                                    <button onClick={() => { setShowHomeWarning(false); onClose(); }} className="h-14 rounded-2xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-rose-500 transition-all shadow-xl shadow-rose-900/20">Exit Now</button>
+                                    <button onClick={() => setShowHomeWarning(false)} className="h-14 rounded-2xl bg-white/5 border border-white/10 text-white text-xs font-bold uppercase tracking-wider hover:bg-white/10 transition-all">Cancel</button>
+                                    <button onClick={() => { setShowHomeWarning(false); onClose(); }} className="h-14 rounded-2xl bg-rose-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-rose-500 transition-all shadow-xl shadow-rose-900/20">Exit Now</button>
                                 </div>
                             </motion.div>
                         </>

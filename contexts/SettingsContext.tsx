@@ -29,30 +29,6 @@ export const defaultProcedureTools: ProcedureToolSettings = {
     zoomControls: true,
 };
 
-// Hardware Device Interface
-export interface HardwareDevice {
-    id: string;
-    manufacturer: string;
-    model: string;
-    viewingAngle: string;
-    isCustom?: boolean;
-    isHidden?: boolean;
-}
-
-// Scope Settings Profile Interface
-export interface ScopeProfile {
-    id: string;
-    name: string; // This is the user-defined nickname
-    manufacturer?: string;
-    model?: string;
-    viewingAngle?: string;
-    // Normalized coordinates (0-1) relative to feed
-    captureArea: { x: number; y: number; width: number; height: number };
-    shape?: 'circle' | 'rectangle';
-    isDefault?: boolean;
-    lastUsed?: number;
-    baseScale?: number; // Base digital zoom multiplier for this scope
-}
 
 export interface SettingsState {
     // Appearance
@@ -95,18 +71,6 @@ export interface SettingsState {
     dateFormat: string;
     timeFormat: '12h' | '24h';
 
-    // Scope Profiles (NEW)
-    scopeProfiles: ScopeProfile[];
-    activeScopeId: string | null;
-    hardwareCatalog: HardwareDevice[]; // NEW
-
-    // Legacy Scope Calibration (Deprecated but kept for migration if needed)
-    scopeSettings: {
-        scale: number;
-        x: number;
-        y: number;
-    };
-
     // Keyboard Shortcuts (NEW)
     shortcuts: {
         newPatient: string;
@@ -118,38 +82,6 @@ export interface SettingsState {
         stopRecording: string;
     };
 }
-
-const defaultHardwareCatalog: HardwareDevice[] = [
-    { id: 'oly-gif-h190', manufacturer: 'Olympus', model: 'GIF-H190', viewingAngle: '0°' },
-    { id: 'oly-cf-h190l', manufacturer: 'Olympus', model: 'CF-H190L', viewingAngle: '0°' },
-    { id: 'storz-telecam', manufacturer: 'Karl Storz', model: 'Telecam', viewingAngle: '0°' },
-    { id: 'storz-lap-30', manufacturer: 'Karl Storz', model: 'Laparoscope', viewingAngle: '30°' },
-    { id: 'storz-lap-0', manufacturer: 'Karl Storz', model: 'Laparoscope', viewingAngle: '0°' },
-    { id: 'storz-lap-70', manufacturer: 'Karl Storz', model: 'Laparoscope', viewingAngle: '70°' },
-    { id: 'fuji-760-series', manufacturer: 'Fujifilm', model: '760 Series', viewingAngle: '0°' },
-];
-
-const defaultScopeProfile: ScopeProfile = {
-    id: 'full-frame',
-    name: 'Full Frame',
-    manufacturer: 'Generic',
-    model: 'Full Frame',
-    viewingAngle: '0°',
-    captureArea: { x: 0.5, y: 0.5, width: 1, height: 1 }, // Full 16:9
-    isDefault: true,
-    lastUsed: Date.now(),
-};
-
-const zoomedScopeProfile: ScopeProfile = {
-    id: 'zoomed-scope',
-    name: 'Zoomed Scope',
-    manufacturer: 'Generic',
-    model: 'Zoomed',
-    viewingAngle: '0°',
-    captureArea: { x: 0.5, y: 0.5, width: 0.8, height: 0.8 },
-    isDefault: false,
-    lastUsed: Date.now(),
-};
 
 export const defaultSettings: SettingsState = {
     theme: 'light',
@@ -176,10 +108,6 @@ export const defaultSettings: SettingsState = {
     language: 'en',
     dateFormat: 'DD/MM/YYYY',
     timeFormat: '12h',
-    scopeProfiles: [defaultScopeProfile, zoomedScopeProfile],
-    activeScopeId: 'full-frame',
-    hardwareCatalog: defaultHardwareCatalog, // NEW
-    scopeSettings: { scale: 1.0, x: 0, y: 0 }, // Default scope settings
     shortcuts: {
         newPatient: 'Ctrl+N',
         search: 'Ctrl+K',
@@ -220,9 +148,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
                     procedureTools: { ...defaultProcedureTools, ...parsed.procedureTools },
                     shortcuts: { ...defaultSettings.shortcuts, ...parsed.shortcuts },
                     videoCalibration: { ...defaultSettings.videoCalibration, ...parsed.videoCalibration },
-                    // Ensure scope profiles exist if loading from old settings
-                    scopeProfiles: parsed.scopeProfiles || defaultSettings.scopeProfiles,
-                    activeScopeId: parsed.activeScopeId || defaultSettings.activeScopeId,
                 });
             } catch (e) {
                 console.error('Failed to parse settings', e);

@@ -13,12 +13,17 @@ import { useSessionStore } from "@/lib/store/session.store";
 import ProcedureToolPanel from "./procedure/ProcedureToolPanel";
 import ImageGallery, { MediaItem } from "./gallery/ImageGallery";
 import CameraFeed, { CameraFeedHandle } from "./procedure/CameraFeed";
+import HistoryComparisonView from "./procedure/HistoryComparisonView";
+import { CustomScopeSettingsInterface } from "./procedure/CustomScopeSettingsInterface";
+import ZoomMiniMap from "./procedure/ZoomMiniMap";
+import { useScopeStore } from "@/lib/store/scope.store";
 import {
     Capture, PendingUpload,
     createCapture, uploadCapture, saveVideoReference,
     fetchExistingMedia, processPendingUploads,
     persistCaptures, loadPersistedCaptures, clearPersistedCaptures,
 } from "@/lib/procedure-data";
+import ExitPreviewModal from "./procedure/ExitPreviewModal";
 
 // ═══════════════════════════════════════════════════════════
 //  ProcedureMode v3 — Clean Rewrite + Robust Data Handling
@@ -55,8 +60,11 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
 
     // ── Recording ──
     const [isRecording, setIsRecording] = useState(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const recordedChunksRef = useRef<Blob[]>([]);
+    const isProcessingRecording = useRef(false);
 
-    // ── Captures (managed via session store) ──
+    // ── Captures ──
     const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
 
     // ── Freeze & PiP ──
@@ -66,19 +74,20 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const [isCompareMode, setIsCompareMode] = useState(false);
     const [comparisonImage, setComparisonImage] = useState<any>(null);
     const [compareLeftImage, setCompareLeftImage] = useState<any>(null);
+    const [lastCompareLeftImage, setLastCompareLeftImage] = useState<any>(null);
     const [leftCompareZoom, setLeftCompareZoom] = useState(1);
     const [rightCompareZoom, setRightCompareZoom] = useState(1);
     const [leftCompareOffset, setLeftCompareOffset] = useState({ x: 0, y: 0 });
     const [rightCompareOffset, setRightCompareOffset] = useState({ x: 0, y: 0 });
 
-    // ── Timer ──
-    const timerRef = useRef(0);
+    // ── Timer (per-segment) ──
+    const segmentTimersRef = useRef<Map<number, number>>(new Map());
     const timerDisplayRef = useRef<HTMLSpanElement>(null);
 
     // ── UI ──
     const [flashActive, setFlashActive] = useState(false);
     const [showEndConfirm, setShowEndConfirm] = useState(false);
-    const [showBackConfirm, setShowBackConfirm] = useState(false);
+    const [showExitPreview, setShowExitPreview] = useState(false);
     const [showRecordingWarning, setShowRecordingWarning] = useState(false);
     const [isPlayingVideo, setPlayingVideo] = useState<any>(null);
     const [isGalleryOpen, setIsGalleryOpen] = useState(false);
@@ -89,32 +98,55 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const [history, setHistory] = useState<any[]>([]);
     const [historyExpanded, setHistoryExpanded] = useState(false);
 
-    // ── Zoom ──
-    const [mainZoom, setMainZoom] = useState(1);
+    // ── PIP ──
+    const [showPip, setShowPip] = useState(true);
+
+    // ── Scope Settings ──
+    const [isScopeSettingsOpen, setIsScopeSettingsOpen] = useState(false);
+
+    // ── Zoom State ──
+    const { scopes, activeScopeId, mainZoom, setMainZoom } = useScopeStore();
     const [zoomRange] = useState({ min: 1, max: 12 });
+    const [zoomPanOffset, setZoomPanOffset] = useState({ x: 0, y: 0 });
+    const [mainSize, setMainSize] = useState({ w: 1, h: 1 });
+    const [panelASize, setPanelASize] = useState({ w: 1, h: 1 });
 
     // ── Refs ──
     const constraintsRef = useRef<HTMLDivElement>(null);
+    const mainFeedConstraintsRef = useRef<HTMLDivElement>(null);
+    const panelARef = useRef<HTMLDivElement>(null);
+    const panelBRef = useRef<HTMLDivElement>(null);
     const isDraggingRef = useRef(false);
 
     // ═══════════════════════════════════════
     //  BOOT
     // ═══════════════════════════════════════
 
-    // Timer
+    // Tick the timer for the currently-active segment every second
     useEffect(() => {
         const iv = setInterval(() => {
-            timerRef.current++;
+            const map = segmentTimersRef.current;
+            const prev = map.get(activeSegmentIndex) || 0;
+            map.set(activeSegmentIndex, prev + 1);
             if (timerDisplayRef.current) {
-                const s = timerRef.current;
+                const s = prev + 1;
                 timerDisplayRef.current.textContent =
                     `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
             }
         }, 1000);
         return () => clearInterval(iv);
-    }, []);
+    }, [activeSegmentIndex]);
 
-    // Fetch patient history
+    // When the active segment changes, immediately update the display
+    // to show the restored elapsed time for the newly-selected segment
+    useEffect(() => {
+        const s = segmentTimersRef.current.get(activeSegmentIndex) || 0;
+        if (timerDisplayRef.current) {
+            timerDisplayRef.current.textContent =
+                `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
+        }
+    }, [activeSegmentIndex]);
+
     useEffect(() => {
         if (!patient?.id) return;
         getPatientHistory(patient.id)
@@ -122,63 +154,55 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             .catch(e => console.error("History fetch error:", e));
     }, [patient?.id]);
 
-    // ── Session Resumption: load from DB + localStorage ──
     useEffect(() => {
         if (segments.length === 0) return;
         let mounted = true;
-
         (async () => {
             try {
-                // 1. Try loading persisted captures from localStorage (crash recovery)
                 const persisted = loadPersistedCaptures(procedureId);
-
-                // 2. Fetch from database for all real segments
                 const dbCaptures = await fetchExistingMedia(segments as any);
-
                 if (!mounted) return;
-
-                // 3. Merge: DB items take priority, then persisted, avoid duplicates
                 setCaptures(prev => {
-                    const existingIds = new Set(prev.map(c => c.id));
+                    const existingLocalIds = new Set(prev.map(c => c.id));
+                    const existingDbIds = new Set(prev.filter(c => c.dbMediaId).map(c => c.dbMediaId));
                     const combined = [...prev];
-
                     for (const cap of dbCaptures) {
-                        if (!existingIds.has(cap.id)) {
+                        if (!existingLocalIds.has(cap.id) && !existingDbIds.has(cap.dbMediaId)) {
                             combined.push(cap);
-                            existingIds.add(cap.id);
+                            existingLocalIds.add(cap.id);
+                            if (cap.dbMediaId) existingDbIds.add(cap.dbMediaId);
                         }
                     }
-
-                    // Add persisted items that are "saved" and have served URLs
                     if (persisted?.captures) {
                         for (const cap of persisted.captures) {
-                            if (cap.url !== "__pending__" && !existingIds.has(cap.id)) {
+                            if (cap.url !== "__pending__" && !existingLocalIds.has(cap.id) && !existingDbIds.has(cap.dbMediaId)) {
                                 combined.push(cap);
-                                existingIds.add(cap.id);
+                                existingLocalIds.add(cap.id);
                             }
                         }
                     }
-
                     return combined;
                 });
-
-                // 4. Restore pending uploads from persisted session
-                if (persisted?.pendingUploads && persisted.pendingUploads.length > 0) {
+                if (persisted?.pendingUploads && persisted.pendingUploads.length > 0)
                     setPendingUploads(persisted.pendingUploads);
-                }
             } catch (e) { console.error("Session resumption error:", e); }
         })();
-
         return () => { mounted = false; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [segments.length]);
 
-    // ── Persist captures to localStorage on change ──
     useEffect(() => {
-        if (captures.length > 0 || pendingUploads.length > 0) {
+        if (captures.length > 0 || pendingUploads.length > 0)
             persistCaptures(procedureId, captures, pendingUploads);
-        }
     }, [captures, pendingUploads, procedureId]);
+
+    // ── Cleanup recording on unmount ──
+    useEffect(() => {
+        return () => {
+            if (mediaRecorderRef.current?.state !== 'inactive')
+                mediaRecorderRef.current?.stop();
+        };
+    }, []);
 
     // ═══════════════════════════════════════
     //  CORE FUNCTIONS
@@ -187,11 +211,11 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const formatTime = (s: number) =>
         `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 
-    // ── Sound ──
     const audioCtxRef = useRef<AudioContext | null>(null);
     const playSound = useCallback((type: "success" | "error") => {
         if (!settings.soundEnabled) return;
-        if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        if (!audioCtxRef.current)
+            audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         const ctx = audioCtxRef.current;
         if (ctx.state === "suspended") ctx.resume();
         const osc = ctx.createOscillator();
@@ -209,49 +233,41 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const handleCapture = useCallback(async (returnDataOnly?: boolean): Promise<string | void> => {
         setFlashActive(true);
         setTimeout(() => setFlashActive(false), 150);
-
         const capData = feedRef.current?.captureFrame();
-        if (!capData) {
-            console.warn("[ProcedureMode] Capture failed — captureFrame() returned null");
-            playSound("error");
-            return;
-        }
+        if (!capData) { playSound("error"); return; }
         if (returnDataOnly) return capData;
 
-        // Create capture object
-        console.log("[ProcedureMode] Creating capture for segmentIndex:", activeSegmentIndex, "procedureId:", procedureId);
-        const newCap = createCapture(capData, "image", activeSegmentIndex, procedureId);
+        const activeScope = scopes.find(s => s.id === activeScopeId);
+        const scopeShape = activeScope?.shape;
+
+        const newCap = createCapture(capData, "image", activeSegmentIndex, procedureId, scopeShape);
         addCapture(newCap);
         playSound("success");
+        if (isCompareMode) {
+            setCompareLeftImage(newCap);
+            setLastCompareLeftImage(newCap);
+        }
 
-        if (isCompareMode) setCompareLeftImage(newCap);
-
-        // Background upload
         (async () => {
             try {
                 const currentSegment = segments.find(s => s.index === activeSegmentIndex);
                 const currentId = currentSegment?.id || procedureId;
                 if (!currentId) return;
-
                 if (currentId.toString().startsWith("temp-")) {
-                    // Segment doesn't have a real DB ID yet — defer
                     setPendingUploads(prev => [...prev, {
                         captureId: newCap.id, tempSegmentId: currentId,
                         segmentIndex: activeSegmentIndex,
                         type: "image", data: capData, timestamp: newCap.timestamp,
                     }]);
                 } else {
-                    // Upload immediately
-                    const result = await uploadCapture(currentId, capData, "IMAGE");
+                    const result = await uploadCapture(currentId, capData, "IMAGE", scopeShape);
                     if (result.success) {
                         setCaptures(prev => prev.map(c =>
                             c.id === newCap.id
                                 ? { ...c, dbMediaId: result.mediaId, url: result.servedUrl || c.url, uploadStatus: "saved" as const }
                                 : c
                         ));
-                        console.log(`[ProcedureMode] Capture saved: ${result.mediaId}`);
                     } else {
-                        console.error("[ProcedureMode] Upload failed:", result.error);
                         setCaptures(prev => prev.map(c =>
                             c.id === newCap.id ? { ...c, uploadStatus: "failed" as const } : c
                         ));
@@ -261,46 +277,119 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
         })();
     }, [procedureId, activeSegmentIndex, segments, playSound, isCompareMode]);
 
-    // ── Recording (daemon-based) ──
+    // ── Recording ─────────────────────────────────────────────────────────
+    // Strategy:
+    //   1. Get MediaStream directly from the live <video> element via
+    //      feedRef.current.getVideoElement().srcObject — this always works
+    //      for WebRTC (local webcam) streams regardless of any daemon.
+    //   2. Use MediaRecorder with vp9 if supported, else plain webm.
+    //   3. On stop: FileReader → base64 data URL → uploadCapture pipeline
+    //      (same pathway as photo captures so it appears in gallery).
     const toggleRecording = useCallback(async () => {
-        const host = window.location.hostname || "localhost";
-        if (!isRecording) {
-            try {
-                const res = await fetch(`http://${host}:5555/record/start`).catch(() => null);
-                if (res?.ok) setIsRecording(true);
-                else console.warn("Daemon record/start failed or not available");
-            } catch { }
-        } else {
-            setIsRecording(false);
-            try {
-                const res = await fetch(`http://${host}:5555/record/stop`).catch(() => null);
-                if (res?.ok) {
-                    const data = await res.json();
-                    const videoUrl = data.filename || null;
-                    if (videoUrl) {
-                        const newCap = createCapture(videoUrl, "video", activeSegmentIndex, procedureId);
+        if (isProcessingRecording.current) return;
+        isProcessingRecording.current = true;
+
+        try {
+            if (!isRecording) {
+                // ── START ──────────────────────────────────────────────
+                const videoEl = feedRef.current?.getVideoElement();
+                const stream = videoEl?.srcObject instanceof MediaStream
+                    ? videoEl.srcObject
+                    : null;
+
+                if (!stream) {
+                    console.warn("[Recording] No MediaStream available. Video element:", videoEl, "srcObject:", videoEl?.srcObject);
+                    return;
+                }
+
+                // Pick best supported codec
+                const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+                    ? 'video/webm;codecs=vp9'
+                    : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+                        ? 'video/webm;codecs=vp8'
+                        : 'video/webm';
+
+                try {
+                    const rec = new MediaRecorder(stream, { mimeType });
+                    recordedChunksRef.current = [];
+                    rec.ondataavailable = (e) => {
+                        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+                    };
+                    rec.start(200); // collect chunks every 200ms
+                    mediaRecorderRef.current = rec;
+                    setIsRecording(true);
+                    console.log("[Recording] Started:", mimeType);
+                } catch (err) {
+                    console.error("[Recording] MediaRecorder start failed:", err);
+                }
+
+            } else {
+                // ── STOP ───────────────────────────────────────────────
+                setIsRecording(false);
+                const rec = mediaRecorderRef.current;
+                if (!rec || rec.state === "inactive") return;
+
+                rec.onstop = () => {
+                    rec.onstop = null;
+                    const chunks = recordedChunksRef.current;
+                    if (chunks.length === 0) {
+                        console.warn("[Recording] No chunks recorded");
+                        return;
+                    }
+
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    recordedChunksRef.current = [];
+                    mediaRecorderRef.current = null;
+
+                    console.log("[Recording] Blob size:", blob.size, "bytes");
+
+                    // Convert blob → base64 data URL → upload via existing pipeline
+                    const reader = new FileReader();
+                    reader.onloadend = async () => {
+                        const base64Data = reader.result as string;
+                        const activeScope = scopes.find(s => s.id === activeScopeId);
+                        const scopeShape = activeScope?.shape;
+
+                        const newCap = createCapture(base64Data, "video", activeSegmentIndex, procedureId, scopeShape);
                         addCapture(newCap);
 
                         const activeProcId = segments.find(s => s.index === activeSegmentIndex)?.id;
                         if (activeProcId && !activeProcId.toString().startsWith("temp-")) {
-                            const result = await saveVideoReference(activeProcId.toString(), videoUrl);
-                            if (result.success) {
+                            try {
+                                const result = await uploadCapture(activeProcId.toString(), base64Data, "VIDEO", scopeShape);
                                 setCaptures(prev => prev.map(c =>
                                     c.id === newCap.id
-                                        ? { ...c, dbMediaId: result.mediaId, uploadStatus: "saved" as const }
+                                        ? {
+                                            ...c,
+                                            dbMediaId: result.success ? result.mediaId : c.dbMediaId,
+                                            url: result.success ? (result.servedUrl || c.url) : c.url,
+                                            uploadStatus: result.success ? "saved" as const : "failed" as const,
+                                        }
                                         : c
+                                ));
+                            } catch (err) {
+                                console.error("[Recording] Upload failed:", err);
+                                setCaptures(prev => prev.map(c =>
+                                    c.id === newCap.id ? { ...c, uploadStatus: "failed" as const } : c
                                 ));
                             }
                         } else if (activeProcId) {
                             setPendingUploads(prev => [...prev, {
-                                captureId: newCap.id, tempSegmentId: activeProcId.toString(),
+                                captureId: newCap.id,
+                                tempSegmentId: activeProcId.toString(),
                                 segmentIndex: activeSegmentIndex,
-                                type: "video", data: videoUrl, timestamp: newCap.timestamp,
+                                type: "video",
+                                data: base64Data,
+                                timestamp: newCap.timestamp,
                             }]);
                         }
-                    }
-                }
-            } catch (e) { console.error("Record stop error:", e); }
+                    };
+                    reader.readAsDataURL(blob);
+                };
+                rec.stop();
+            }
+        } finally {
+            setTimeout(() => { isProcessingRecording.current = false; }, 300);
         }
     }, [isRecording, activeSegmentIndex, segments, procedureId]);
 
@@ -310,111 +399,107 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             setFrozenFrame(null);
         } else {
             const frame = feedRef.current?.captureFrame();
-            if (frame) setFrozenFrame(frame);
+            if (frame) {
+                setFrozenFrame(frame);
+                // Reset zoom to 1x on freeze as requested
+                setMainZoom(1);
+                setZoomPanOffset({ x: 0, y: 0 });
+            }
         }
-    }, [frozenFrame]);
+    }, [frozenFrame, setMainZoom, setZoomPanOffset]);
 
     // ── Zoom ──
     const handleZoomChange = useCallback((z: number) => {
         setMainZoom(z);
-    }, []);
+        if (z <= 1.01) setZoomPanOffset({ x: 0, y: 0 });
+    }, [setMainZoom]);
 
     // ── Compare Mode ──
     useEffect(() => {
         if (!isCompareMode) {
-            setCompareLeftImage(null);
-            setComparisonImage(null);
-            setLeftCompareZoom(1);
-            setRightCompareZoom(1);
-            setLeftCompareOffset({ x: 0, y: 0 });
-            setRightCompareOffset({ x: 0, y: 0 });
+            setCompareLeftImage(null); setComparisonImage(null);
+            setLeftCompareZoom(1); setRightCompareZoom(1);
+            setLeftCompareOffset({ x: 0, y: 0 }); setRightCompareOffset({ x: 0, y: 0 });
         }
     }, [isCompareMode]);
 
+    const handleLeftCompareZoomChange = useCallback((z: number) => {
+        setLeftCompareZoom(z);
+        if (z <= 1.01) setLeftCompareOffset({ x: 0, y: 0 });
+    }, []);
+
+    const handleRightCompareZoomChange = useCallback((z: number) => {
+        setRightCompareZoom(z);
+        if (z <= 1.01) setRightCompareOffset({ x: 0, y: 0 });
+    }, []);
+
     const handleToggleCompare = useCallback(() => { setIsCompareMode(p => !p); }, []);
-
-    const handleSelectComparisonImage = useCallback((url: string | null, isHistory?: boolean) => {
-        if (url) {
-            if (isHistory) setComparisonImage(url);
-            else setCompareLeftImage(url);
-            setIsCompareMode(true);
-        } else {
-            setIsCompareMode(false);
+    const handleSelectComparisonImage = useCallback((item: any, isHistory?: boolean) => {
+        if (!item) {
+            if (isHistory) setComparisonImage(null);
+            else setCompareLeftImage(null);
+            return;
         }
-    }, []);
 
-    // ── Switch Camera (no-op for daemon, kept for interface) ──
+        if (isHistory) {
+            setComparisonImage(item);
+            setRightCompareZoom(1);
+            setRightCompareOffset({ x: 0, y: 0 });
+        } else {
+            setCompareLeftImage(item);
+            setLastCompareLeftImage(item);
+            setLeftCompareZoom(1);
+            setLeftCompareOffset({ x: 0, y: 0 });
+        }
+        setIsCompareMode(true);
+    }, []);
     const handleSwitchCamera = useCallback(() => { }, []);
+    const handleOpenGallery = useCallback((cap: Capture) => { setPreviewImage(cap.url); }, []);
 
-    // ── Open Gallery / Preview ──
-    const handleOpenGallery = useCallback((cap: Capture) => {
-        setPreviewImage(cap.url);
-    }, []);
-
-    // ── Add Segment ──
     const handleAddSegment = useCallback(async () => {
         try {
             const { getSeededDoctorId } = await import("@/app/actions/auth");
             const docId = await getSeededDoctorId();
             if (!docId) return;
-
             const newIndex = segments.length + 1;
             const tempId = `temp-${Date.now()}`;
             addSegment({ id: tempId, index: newIndex, status: "draft", createdAt: new Date(), type: "generic" });
-
             createProcedure({ patientId: patient.id, doctorId: docId, type: "generic" })
-                .then(res => {
-                    if (res.success && res.procedureId) updateSegment(newIndex, { id: res.procedureId });
-                })
+                .then(res => { if (res.success && res.procedureId) updateSegment(newIndex, { id: res.procedureId }); })
                 .catch(err => console.error("Create procedure error:", err));
         } catch (err) { console.error("Failed to create segment:", err); }
     }, [segments, patient.id, addSegment, updateSegment]);
 
-    // ── Deferred Upload Processor ──
     useEffect(() => {
         if (pendingUploads.length === 0) return;
         (async () => {
             const remaining = await processPendingUploads(
-                pendingUploads,
-                segments as any,
+                pendingUploads, segments as any,
                 (captureId, updates) => {
-                    setCaptures(prev => prev.map(c =>
-                        c.id === captureId ? { ...c, ...updates } : c
-                    ));
+                    setCaptures(prev => prev.map(c => c.id === captureId ? { ...c, ...updates } : c));
                 }
             );
-            if (remaining.length !== pendingUploads.length) {
-                setPendingUploads(remaining);
-            }
+            if (remaining.length !== pendingUploads.length) setPendingUploads(remaining);
         })();
     }, [pendingUploads, segments]);
 
-    // ── Back ──
     const handleBack = useCallback(() => {
-        if (isCompareMode) {
-            setIsCompareMode(false);
-            return;
-        }
-        if (isRecording || captures.length > 0) setShowBackConfirm(true);
+        if (isCompareMode) { setIsCompareMode(false); return; }
+        if (isRecording || captures.length > 0) setShowExitPreview(true);
         else if (onBack) onBack();
     }, [isCompareMode, isRecording, captures.length, onBack]);
 
-    // ── End ──
     const handleEndProcedure = useCallback(() => {
         if (isRecording) setShowRecordingWarning(true);
         else setShowEndConfirm(true);
     }, [isRecording]);
 
-    // ── Finish ──
     const performFinish = async () => {
         if (onGenerateReport) onGenerateReport(captures);
         (async () => {
             if (pendingUploads.length > 0) {
                 let retries = 0;
-                while (pendingUploads.length > 0 && retries < 10) {
-                    await new Promise(r => setTimeout(r, 500));
-                    retries++;
-                }
+                while (pendingUploads.length > 0 && retries < 10) { await new Promise(r => setTimeout(r, 500)); retries++; }
             }
             try { await endProcedure(procedureId); } catch (e) { console.error("endProcedure failed:", e); }
         })();
@@ -427,7 +512,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const toggleRecRef = useRef(toggleRecording);
     const freezeRef = useRef(handleToggleFreeze);
     const showEndConfirmRef = useRef(showEndConfirm);
-    const showBackConfirmRef = useRef(showBackConfirm);
+    const showExitPreviewRef = useRef(showExitPreview);
     const isGalleryOpenRef = useRef(isGalleryOpen);
     const frozenFrameRef = useRef(frozenFrame);
 
@@ -435,7 +520,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     useEffect(() => { toggleRecRef.current = toggleRecording; }, [toggleRecording]);
     useEffect(() => { freezeRef.current = handleToggleFreeze; }, [handleToggleFreeze]);
     useEffect(() => { showEndConfirmRef.current = showEndConfirm; }, [showEndConfirm]);
-    useEffect(() => { showBackConfirmRef.current = showBackConfirm; }, [showBackConfirm]);
+    useEffect(() => { showExitPreviewRef.current = showExitPreview; }, [showExitPreview]);
     useEffect(() => { isGalleryOpenRef.current = isGalleryOpen; }, [isGalleryOpen]);
     useEffect(() => { frozenFrameRef.current = frozenFrame; }, [frozenFrame]);
 
@@ -447,13 +532,13 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                 case "r": e.preventDefault(); toggleRecRef.current(); break;
                 case "f": e.preventDefault(); freezeRef.current(); break;
                 case "c": e.preventDefault(); setIsCompareMode(p => !p); break;
-                case "=": case "+": e.preventDefault(); setMainZoom(p => Math.min(p + 0.5, 12)); break;
-                case "-": e.preventDefault(); setMainZoom(p => Math.max(p - 0.5, 1)); break;
+                case "=": case "+": e.preventDefault(); setMainZoom((p: number) => Math.min(p + 0.5, 12)); break;
+                case "-": e.preventDefault(); setMainZoom((p: number) => Math.max(p - 0.5, 1)); break;
                 case "z": e.preventDefault(); setMainZoom(1); break;
                 case "escape":
                     e.preventDefault();
                     if (showEndConfirmRef.current) setShowEndConfirm(false);
-                    else if (showBackConfirmRef.current) setShowBackConfirm(false);
+                    else if (showExitPreviewRef.current) setShowExitPreview(false);
                     else if (isGalleryOpenRef.current) setIsGalleryOpen(false);
                     else if (frozenFrameRef.current) setFrozenFrame(null);
                     break;
@@ -469,7 +554,6 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     // ═══════════════════════════════════════
     //  RENDER
     // ═══════════════════════════════════════
-
     return (
         <div className="flex h-screen w-full bg-black text-white font-sans overflow-hidden select-none">
 
@@ -480,87 +564,368 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             >
                 <div className="flex-1 relative bg-black overflow-hidden">
 
-                    {/* ── Compare Mode ── */}
                     {isCompareMode ? (
                         <div className="w-full h-full flex flex-col overflow-hidden bg-black relative">
-                            <button
-                                onClick={() => setIsCompareMode(false)}
-                                className="absolute top-4 right-4 z-[80] w-9 h-9 rounded-full bg-red-950/80 hover:bg-red-600/40 flex items-center justify-center text-red-100 transition-all border border-red-500/30 shadow-lg"
-                                title="Exit Compare Mode"
-                            >
-                                <X size={18} />
-                            </button>
+                            {/* Exit / Toolbar */}
+                            <div className="absolute top-4 right-4 z-[90] flex items-center gap-3">
+                                <button onClick={() => setIsCompareMode(false)}
+                                    className="w-9 h-9 rounded-full bg-red-950/80 hover:bg-red-600/40 flex items-center justify-center text-red-100 transition-all border border-red-500/30 shadow-lg"
+                                    title="Exit Compare Mode">
+                                    <X size={18} />
+                                </button>
+                            </div>
 
                             <div className="flex-1 flex overflow-hidden min-h-0 bg-zinc-950 p-3 gap-4">
-                                {/* LEFT: Session image or live feed */}
-                                <div className="flex-1 relative bg-black/40 rounded-3xl flex items-center justify-center border-2 border-white/5 overflow-hidden">
-                                    {compareLeftImage ? (
-                                        <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
-                                            {compareLeftImage?.type === "video" ? (
-                                                <video src={compareLeftImage?.url} controls muted autoPlay loop className="max-w-full max-h-full object-contain" />
+                                {/* IMAGE A - CURRENT SESSION */}
+                                <div
+                                    ref={(el) => {
+                                        (panelARef as any).current = el;
+                                        if (el && (el.clientWidth !== panelASize.w || el.clientHeight !== panelASize.h)) {
+                                            setPanelASize({ w: el.clientWidth, h: el.clientHeight });
+                                        }
+                                    }}
+                                    onClick={() => {
+                                        if (!compareLeftImage && lastCompareLeftImage) {
+                                            setCompareLeftImage(lastCompareLeftImage);
+                                        }
+                                    }}
+                                    className={`flex-1 relative bg-black rounded-[32px] flex items-center justify-center border border-white/10 overflow-hidden group/panelA ${(!compareLeftImage && lastCompareLeftImage) ? 'cursor-pointer' : ''}`}
+                                >
+                                    <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
+                                        {!compareLeftImage ? (
+                                            <div className="absolute inset-0 overflow-hidden flex items-center justify-center pointer-events-none">
+                                                <div className="relative flex items-center justify-center" style={{ aspectRatio: mainSize.w && mainSize.h ? `${mainSize.w}/${mainSize.h}` : '16/9', width: '100%', maxHeight: '100%', maxWidth: '100%' }}>
+                                                    <motion.div
+                                                        animate={{
+                                                            x: zoomPanOffset.x * (panelASize.w / (mainSize.w || 1)),
+                                                            y: zoomPanOffset.y * (panelASize.h / (mainSize.h || 1)),
+                                                            scale: mainZoom
+                                                        }}
+                                                        transition={{ type: "spring", stiffness: 400, damping: 40, mass: 0.4 }}
+                                                        style={{ transformOrigin: '50% 50%', width: '100%', height: '100%' }}
+                                                        className="w-full h-full flex items-center justify-center"
+                                                    >
+                                                        <CameraFeed
+                                                            ref={feedRef}
+                                                            className="absolute inset-0 w-full h-full"
+                                                            zoom={mainZoom}
+                                                            zoomPanOffset={zoomPanOffset}
+                                                            aspectRatioCorrection={settings.aspectRatio}
+                                                        />
+                                                    </motion.div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            compareLeftImage?.type === "video" ? (
+                                                <video src={compareLeftImage?.url} controls muted autoPlay loop className="max-w-full max-h-full object-contain pointer-events-auto" />
                                             ) : (
                                                 <motion.img
-                                                    drag={leftCompareZoom > 1}
-                                                    dragMomentum={false}
-                                                    dragElastic={0}
-                                                    onDrag={(_e, info) => { setLeftCompareOffset(prev => ({ x: prev.x + info.delta.x, y: prev.y + info.delta.y })); }}
+                                                    drag={leftCompareZoom > 1} dragMomentum={false} dragElastic={0}
+                                                    onDrag={(_e, info) => {
+                                                        setLeftCompareOffset(prev => {
+                                                            const el = panelARef.current;
+                                                            const W = el ? el.clientWidth : 1;
+                                                            const H = el ? el.clientHeight : 1;
+                                                            const maxX = (W * (leftCompareZoom - 1)) / 2;
+                                                            const maxY = (H * (leftCompareZoom - 1)) / 2;
+                                                            return {
+                                                                x: Math.max(-maxX, Math.min(maxX, prev.x + info.delta.x)),
+                                                                y: Math.max(-maxY, Math.min(maxY, prev.y + info.delta.y))
+                                                            };
+                                                        });
+                                                    }}
                                                     src={compareLeftImage?.url || compareLeftImage}
-                                                    className={`max-w-full max-h-full object-contain cursor-${leftCompareZoom > 1 ? "grab" : "pointer"}`}
+                                                    className={`max-w-full max-h-full object-contain pointer-events-auto cursor-${leftCompareZoom > 1 ? "grab" : "default"}`}
                                                     style={{ scale: leftCompareZoom }}
                                                     animate={{ x: leftCompareOffset.x, y: leftCompareOffset.y }}
-                                                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                                                    transition={{ type: "spring", stiffness: 400, damping: 40, mass: 0.4 }}
                                                     alt="Left"
+                                                />
+                                            )
+                                        )}
+                                    </div>
+
+                                    <div className="absolute top-6 left-6 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/30 backdrop-blur-xl z-20 pointer-events-none">
+                                        <span className="text-[11px] font-black text-emerald-400 uppercase tracking-widest">Image A</span>
+                                    </div>
+
+                                    {compareLeftImage && (
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setShowPip(p => !p); }}
+                                            className={`absolute top-6 right-6 h-9 px-4 rounded-full flex items-center gap-2 text-[10px] font-black uppercase tracking-widest transition-all border shadow-lg z-30 ${showPip ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-black/60 border-white/10 text-white/60'}`}
+                                        >
+                                            <Video size={14} />
+                                            <span>{showPip ? "Hide PIP" : "Show PIP"}</span>
+                                        </button>
+                                    )}
+
+                                    {/* LIVE PIP */}
+                                    <AnimatePresence>
+                                        {showPip && compareLeftImage && (
+                                            <motion.div
+                                                drag dragConstraints={panelARef} dragElastic={0} dragMomentum={false}
+                                                initial={{ opacity: 0, scale: 0.8 }}
+                                                animate={{ opacity: 1, scale: 1 }}
+                                                exit={{ opacity: 0, scale: 0.8 }}
+                                                onDragStart={() => { isDraggingRef.current = true; }}
+                                                onDragEnd={() => { setTimeout(() => { isDraggingRef.current = false; }, 250); }}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (!isDraggingRef.current) {
+                                                        setCompareLeftImage(null);
+                                                    }
+                                                }}
+                                                className="absolute bottom-6 right-6 z-[60] w-48 h-48 rounded-full border-2 border-white/20 shadow-2xl overflow-hidden bg-black ring-4 ring-black/50 cursor-grab active:cursor-grabbing hover:border-indigo-500 shadow-indigo-500/20 group/pip"
+                                            >
+                                                <CameraFeed
+                                                    ref={feedRef}
+                                                    className="w-full h-full"
+                                                    pipMode
+                                                    aspectRatioCorrection={settings.aspectRatio}
+                                                />
+                                                <div className="absolute inset-0 bg-black/0 group-hover/pip:bg-black/40 flex items-center justify-center transition-colors">
+                                                    <div className="flex flex-col items-center gap-1 opacity-0 group-hover/pip:opacity-100">
+                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]" />
+                                                        <span className="text-[8px] font-black text-white uppercase tracking-widest">Live Feed</span>
+                                                    </div>
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+
+                                    {/* ZOOM UI FOR IMAGE A */}
+                                    <div className="absolute bottom-6 right-6 z-[70] flex flex-col items-end gap-2 pointer-events-none">
+                                        {(!compareLeftImage ? mainZoom : leftCompareZoom) > 1 && (
+                                            <div className="pointer-events-auto">
+                                                <ZoomMiniMap
+                                                    imageUrl={!compareLeftImage ? "" : (compareLeftImage.url || compareLeftImage)}
+                                                    zoom={!compareLeftImage ? mainZoom : leftCompareZoom}
+                                                    offset={!compareLeftImage ? zoomPanOffset : leftCompareOffset}
+                                                />
+                                            </div>
+                                        )}
+                                        <div className="flex items-center gap-2 bg-black/60 backdrop-blur-xl border border-white/10 px-3 py-2 rounded-2xl shadow-2xl pointer-events-auto">
+                                            <button onClick={() => !compareLeftImage ? handleZoomChange(Math.max(zoomRange.min, mainZoom - 0.5)) : handleLeftCompareZoomChange(Math.max(zoomRange.min, leftCompareZoom - 0.5))} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors">
+                                                <ZoomOut size={14} />
+                                            </button>
+                                            <div className="w-24 relative h-3 flex items-center group">
+                                                <div className="absolute inset-x-0 h-1 bg-white/20 rounded-full top-1/2 -translate-y-1/2" />
+                                                <motion.div
+                                                    className="h-1 bg-emerald-500 rounded-full absolute left-0 top-1/2 -translate-y-1/2 pointer-events-none"
+                                                    initial={false}
+                                                    animate={{ width: `${(((!compareLeftImage ? mainZoom : leftCompareZoom) - zoomRange.min) / (zoomRange.max - zoomRange.min)) * 100}%` }}
+                                                />
+                                                <input
+                                                    type="range"
+                                                    min={zoomRange.min}
+                                                    max={zoomRange.max}
+                                                    step={0.1}
+                                                    value={!compareLeftImage ? mainZoom : leftCompareZoom}
+                                                    onChange={(e) => !compareLeftImage ? handleZoomChange(parseFloat(e.target.value)) : handleLeftCompareZoomChange(parseFloat(e.target.value))}
+                                                    className="absolute inset-0 w-full opacity-0 cursor-pointer z-10"
+                                                />
+                                            </div>
+                                            <button onClick={() => !compareLeftImage ? handleZoomChange(Math.min(zoomRange.max, mainZoom + 0.5)) : handleLeftCompareZoomChange(Math.min(zoomRange.max, leftCompareZoom + 0.5))} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors">
+                                                <ZoomIn size={14} />
+                                            </button>
+                                            <button onClick={() => !compareLeftImage ? handleZoomChange(1) : handleLeftCompareZoomChange(1)} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors ml-2 border-l border-white/10 pl-3">
+                                                <RotateCcw size={14} />
+                                            </button>
+                                            <div className="ml-1 w-8 text-right">
+                                                <span className="text-[10px] font-black text-emerald-400 tabular-nums">{(!compareLeftImage ? mainZoom : leftCompareZoom).toFixed(1)}x</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* IMAGE B - HISTORY / MEDIA */}
+                                <div ref={panelBRef} className="flex-1 relative bg-black rounded-[32px] flex items-center justify-center border border-white/10 overflow-hidden group/panelB">
+                                    {comparisonImage ? (
+                                        <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
+                                            {comparisonImage?.type === "video" ? (
+                                                <video src={comparisonImage?.url} controls muted autoPlay loop className="max-w-full max-h-full object-contain" />
+                                            ) : comparisonImage?.type === "report" ? (
+                                                <iframe src={comparisonImage?.url} className="w-full h-full bg-white" title="Report PDF" />
+                                            ) : (
+                                                <motion.img
+                                                    drag={rightCompareZoom > 1} dragMomentum={false} dragElastic={0}
+                                                    onDrag={(_e, info) => {
+                                                        setRightCompareOffset(prev => {
+                                                            const el = panelBRef.current;
+                                                            const W = el ? el.clientWidth : 1;
+                                                            const H = el ? el.clientHeight : 1;
+                                                            const maxX = (W * (rightCompareZoom - 1)) / 2;
+                                                            const maxY = (H * (rightCompareZoom - 1)) / 2;
+                                                            return {
+                                                                x: Math.max(-maxX, Math.min(maxX, prev.x + info.delta.x)),
+                                                                y: Math.max(-maxY, Math.min(maxY, prev.y + info.delta.y))
+                                                            };
+                                                        });
+                                                    }}
+                                                    src={typeof comparisonImage === "string" ? comparisonImage : comparisonImage?.url}
+                                                    className={`max-w-full max-h-full object-contain cursor-${rightCompareZoom > 1 ? "grab" : "default"}`}
+                                                    style={{ scale: rightCompareZoom }}
+                                                    animate={{ x: rightCompareOffset.x, y: rightCompareOffset.y }}
+                                                    transition={{ type: "spring", stiffness: 400, damping: 40, mass: 0.4 }}
+                                                    alt="Right"
                                                 />
                                             )}
                                         </div>
                                     ) : (
-                                        <CameraFeed ref={feedRef} className="w-full h-full" />
+                                        <div className="flex flex-col items-center justify-center gap-4 text-zinc-700">
+                                            <div className="w-20 h-20 rounded-full border-2 border-dashed border-zinc-800 flex items-center justify-center">
+                                                <Move3d size={32} />
+                                            </div>
+                                            <div className="text-center">
+                                                <p className="text-[11px] font-black uppercase tracking-[0.2em]">Image B Empty</p>
+                                                <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-800 mt-1">Select from history or session below</p>
+                                            </div>
+                                        </div>
                                     )}
-                                    <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-emerald-950/80 border border-emerald-500/30 z-20">
-                                        <span className="text-[11px] font-black text-emerald-100 uppercase tracking-widest">
-                                            {compareLeftImage ? "Image A" : "Live Feed"}
-                                        </span>
+                                    <div className="absolute top-6 left-6 px-4 py-2 rounded-full bg-indigo-500/10 border border-indigo-500/30 backdrop-blur-xl z-20">
+                                        <span className="text-[11px] font-black text-indigo-400 uppercase tracking-widest">Image B</span>
+                                    </div>
+
+                                    {/* ZOOM UI FOR IMAGE B */}
+                                    {comparisonImage && (
+                                        <div className="absolute bottom-6 right-6 z-[70] flex flex-col items-end gap-2 pointer-events-none">
+                                            {rightCompareZoom > 1 && (
+                                                <div className="pointer-events-auto">
+                                                    <ZoomMiniMap
+                                                        imageUrl={typeof comparisonImage === "string" ? comparisonImage : (comparisonImage?.url || "")}
+                                                        zoom={rightCompareZoom}
+                                                        offset={rightCompareOffset}
+                                                    />
+                                                </div>
+                                            )}
+                                            <div className="flex items-center gap-2 bg-black/60 backdrop-blur-xl border border-white/10 px-3 py-2 rounded-2xl shadow-2xl pointer-events-auto">
+                                                <button onClick={() => handleRightCompareZoomChange(Math.max(zoomRange.min, rightCompareZoom - 0.5))} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors">
+                                                    <ZoomOut size={14} />
+                                                </button>
+                                                <div className="w-24 relative h-3 flex items-center group">
+                                                    <div className="absolute inset-x-0 h-1 bg-white/20 rounded-full top-1/2 -translate-y-1/2" />
+                                                    <motion.div
+                                                        className="h-1 bg-indigo-500 rounded-full absolute left-0 top-1/2 -translate-y-1/2 pointer-events-none"
+                                                        initial={false}
+                                                        animate={{ width: `${((rightCompareZoom - zoomRange.min) / (zoomRange.max - zoomRange.min)) * 100}%` }}
+                                                    />
+                                                    <input
+                                                        type="range"
+                                                        min={zoomRange.min}
+                                                        max={zoomRange.max}
+                                                        step={0.1}
+                                                        value={rightCompareZoom}
+                                                        onChange={(e) => handleRightCompareZoomChange(parseFloat(e.target.value))}
+                                                        className="absolute inset-0 w-full opacity-0 cursor-pointer z-10"
+                                                    />
+                                                </div>
+                                                <button onClick={() => handleRightCompareZoomChange(Math.min(zoomRange.max, rightCompareZoom + 0.5))} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors">
+                                                    <ZoomIn size={14} />
+                                                </button>
+                                                <button onClick={() => handleRightCompareZoomChange(1)} className="p-1 hover:bg-white/10 rounded-lg text-zinc-400 hover:text-white transition-colors ml-2 border-l border-white/10 pl-3">
+                                                    <RotateCcw size={14} />
+                                                </button>
+                                                <div className="ml-1 w-8 text-right">
+                                                    <span className="text-[10px] font-black text-indigo-400 tabular-nums">{rightCompareZoom.toFixed(1)}x</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Session Strip (Horizontal Single Row - 50/50 Split) */}
+                            <div className="shrink-0 bg-zinc-950 border-t border-white/10 flex items-center h-[100px]">
+                                {/* Current Session Gallery (Left 50%) */}
+                                <div className="flex-1 flex items-center gap-4 h-full px-6 border-r border-white/10 min-w-0">
+                                    <div className="flex flex-col min-w-[70px]">
+                                        <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest leading-none">Current</span>
+                                        <span className="text-[10px] font-bold text-white uppercase tracking-tight">Session</span>
+                                    </div>
+                                    <div className="flex-1 flex items-center gap-2 overflow-x-auto overflow-y-hidden h-full py-2 scrollbar-none">
+                                        {captures.length > 0 ? (
+                                            captures.map((cap, i) => (
+                                                <div
+                                                    key={cap.id || i}
+                                                    onClick={() => handleSelectComparisonImage(cap, false)}
+                                                    className={`w-14 h-14 shrink-0 rounded-lg bg-zinc-900 border-2 overflow-hidden cursor-pointer transition-all relative group ${((typeof compareLeftImage === 'string' ? compareLeftImage : compareLeftImage?.url) === cap.url) ? 'border-emerald-500 shadow-lg shadow-emerald-500/20' : 'border-white/5 hover:border-white/20'}`}
+                                                >
+                                                    {cap.type === "video" ? (
+                                                        <div className="w-full h-full flex items-center justify-center bg-indigo-500/10">
+                                                            <Video size={14} className="text-indigo-400" />
+                                                        </div>
+                                                    ) : (
+                                                        <img src={cap.url} className="w-full h-full object-cover transition-transform group-hover:scale-110" alt="" />
+                                                    )}
+                                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="text-zinc-700 text-[9px] font-bold uppercase tracking-widest px-4">No Media</div>
+                                        )}
                                     </div>
                                 </div>
 
-                                {/* RIGHT: Comparison image */}
-                                <div className="flex-1 relative bg-black/40 rounded-3xl flex items-center justify-center border-2 border-white/5 overflow-hidden">
-                                    {comparisonImage ? (
-                                        <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
-                                            <motion.img
-                                                drag={rightCompareZoom > 1}
-                                                dragMomentum={false}
-                                                dragElastic={0}
-                                                onDrag={(_e, info) => { setRightCompareOffset(prev => ({ x: prev.x + info.delta.x, y: prev.y + info.delta.y })); }}
-                                                src={typeof comparisonImage === "string" ? comparisonImage : comparisonImage?.url}
-                                                className={`max-w-full max-h-full object-contain cursor-${rightCompareZoom > 1 ? "grab" : "pointer"}`}
-                                                style={{ scale: rightCompareZoom }}
-                                                animate={{ x: rightCompareOffset.x, y: rightCompareOffset.y }}
-                                                transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                                                alt="Right"
-                                            />
-                                        </div>
-                                    ) : (
-                                        <div className="flex flex-col items-center gap-3 opacity-20">
-                                            <Move3d size={32} />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest">Select an image to compare</span>
-                                        </div>
-                                    )}
-                                    <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-indigo-950/80 border border-indigo-500/30 z-20">
-                                        <span className="text-[11px] font-black text-indigo-100 uppercase tracking-widest">Image B</span>
+                                {/* History Gallery (Right 50%) */}
+                                <div className="flex-1 flex items-center gap-4 h-full px-6 min-w-0">
+                                    <div className="flex flex-col min-w-[100px]">
+                                        <span className="text-[8px] font-black text-indigo-500 uppercase tracking-widest leading-none">Patient</span>
+                                        <span className="text-[10px] font-bold text-white uppercase tracking-tight">History</span>
+                                    </div>
+                                    <div className="flex-1 flex items-center gap-3 overflow-x-auto overflow-y-hidden h-full py-2 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                                        {history.length > 0 ? (
+                                            history.map((h: any, sessionIdx: number) => (
+                                                <div key={h.id || sessionIdx} className="flex items-center gap-2 h-full shrink-0">
+                                                    {/* Session Group Header Pill */}
+                                                    <div className="h-14 px-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col justify-center shrink-0">
+                                                        <span className="text-[7px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-0.5">{h.date}</span>
+                                                        <span className="text-[9px] font-bold text-white/80 uppercase truncate max-w-[80px] leading-tight">{h.procedure}</span>
+                                                    </div>
+
+                                                    {/* Media Items for this session */}
+                                                    <div className="flex items-center gap-2">
+                                                        {(h.media || []).map((m: any, idx: number) => (
+                                                            <div
+                                                                key={m.id || idx}
+                                                                onClick={() => handleSelectComparisonImage(m, true)}
+                                                                className={`w-14 h-14 shrink-0 rounded-lg bg-zinc-900 border-2 overflow-hidden cursor-pointer transition-all relative group shadow-lg ${comparisonImage?.id === m.id ? 'border-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.3)]' : 'border-white/5 hover:border-white/20'}`}
+                                                                title={`${h.date} - ${h.procedure}`}
+                                                            >
+                                                                {m.type === "image" ? (
+                                                                    <img src={m.url} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt="" />
+                                                                ) : m.type === "video" ? (
+                                                                    <div className="w-full h-full flex items-center justify-center bg-indigo-500/10">
+                                                                        <Video size={14} className="text-indigo-400" />
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="w-full h-full flex items-center justify-center bg-red-500/10">
+                                                                        <FileText size={14} className="text-red-400" />
+                                                                    </div>
+                                                                )}
+                                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all" />
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Divider between sessions */}
+                                                    {sessionIdx < history.length - 1 && (
+                                                        <div className="w-px h-8 bg-white/5 mx-1" />
+                                                    )}
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="text-zinc-700 text-[9px] font-bold uppercase tracking-widest px-4 italic">No history available</div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                     ) : previewImage ? (
-                        /* ── Image Preview ── */
                         <div className="w-full h-full relative flex items-center justify-center bg-black/80 backdrop-blur-md">
                             <img src={previewImage} className="max-w-full max-h-full object-contain" alt="Captured" />
-                            <button
-                                onClick={() => setPreviewImage(null)}
-                                className="absolute top-4 right-4 z-[80] w-12 h-12 rounded-full bg-black/80 hover:bg-red-600 flex items-center justify-center text-white/70 hover:text-white transition-all border border-white/20 shadow-2xl"
-                            >
+                            <button onClick={() => setPreviewImage(null)}
+                                className="absolute top-4 right-4 z-[80] w-12 h-12 rounded-full bg-black/80 hover:bg-red-600 flex items-center justify-center text-white/70 hover:text-white transition-all border border-white/20 shadow-2xl">
                                 <X size={24} />
                             </button>
                             <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-indigo-600/20 border border-indigo-500/30 backdrop-blur-md z-20">
@@ -569,37 +934,74 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         </div>
 
                     ) : (
-                        /* ═══ RAW CAMERA FEED ═══ */
-                        <div className="w-full h-full" style={{ transform: mainZoom > 1 ? `scale(${mainZoom})` : undefined, transformOrigin: "center center", transition: "transform 0.15s ease-out" }}>
-                            {frozenFrame ? (
-                                <img src={frozenFrame} alt="Frozen" className="w-full h-full object-contain" style={{ background: "#000" }} />
-                            ) : (
-                                <CameraFeed ref={feedRef} className="w-full h-full" />
-                            )}
+                        /* ═══ LIVE CAMERA FEED ═══ */
+                        <div
+                            ref={(el) => {
+                                (mainFeedConstraintsRef as any).current = el;
+                                if (el && (el.clientWidth !== mainSize.w || el.clientHeight !== mainSize.h)) {
+                                    setMainSize({ w: el.clientWidth, h: el.clientHeight });
+                                }
+                            }}
+                            className="w-full h-full relative flex items-center justify-center overflow-hidden"
+                        >
+                            <motion.div
+                                drag={mainZoom > 1.01}
+                                dragMomentum={false}
+                                dragElastic={0}
+                                dragConstraints={mainFeedConstraintsRef}
+                                onDrag={(_e, info) => {
+                                    setZoomPanOffset(prev => {
+                                        // Clamp pan so zoomed content stays within canvas
+                                        const el = mainFeedConstraintsRef.current;
+                                        const W = el ? el.clientWidth : window.innerWidth;
+                                        const H = el ? el.clientHeight : window.innerHeight;
+                                        const maxX = (W * (mainZoom - 1)) / 2;
+                                        const maxY = (H * (mainZoom - 1)) / 2;
+                                        const nx = Math.max(-maxX, Math.min(maxX, prev.x + info.delta.x));
+                                        const ny = Math.max(-maxY, Math.min(maxY, prev.y + info.delta.y));
+                                        return { x: nx, y: ny };
+                                    });
+                                }}
+                                animate={{ x: zoomPanOffset.x, y: zoomPanOffset.y, scale: mainZoom }}
+                                transition={{ type: "spring", stiffness: 400, damping: 40, mass: 0.4 }}
+                                style={{ transformOrigin: '50% 50%', width: '100%', height: '100%' }}
+                                className="flex items-center justify-center cursor-default active:cursor-grabbing"
+                            >
+                                {frozenFrame ? (
+                                    <img src={frozenFrame} alt="Frozen" className="w-full h-full object-contain" style={{ background: "#000" }} />
+                                ) : (
+                                    <CameraFeed
+                                        ref={feedRef}
+                                        className="w-full h-full"
+                                        zoom={mainZoom}
+                                        zoomPanOffset={zoomPanOffset}
+                                        aspectRatioCorrection={settings.aspectRatio}
+                                    />
+                                )}
+                            </motion.div>
                         </div>
-                    )}
+                    )
+                    }
 
-                    {/* Frozen Frame PiP — circular draggable bubble */}
+                    {/* Frozen Frame PiP */}
                     <AnimatePresence>
                         {frozenFrame && !isCompareMode && (
                             <motion.div
-                                drag
-                                dragConstraints={constraintsRef}
-                                dragMomentum={false}
-                                dragElastic={0.1}
-                                initial={{ opacity: 0, scale: 0.8 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
+                                drag dragConstraints={mainFeedConstraintsRef} dragElastic={0} dragMomentum={false}
+                                initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
                                 onDragStart={() => { isDraggingRef.current = true; }}
                                 onDragEnd={() => { setTimeout(() => { isDraggingRef.current = false; }, 250); }}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!isDraggingRef.current) setFrozenFrame(null);
-                                }}
-                                className="absolute bottom-6 right-6 z-[60] w-44 h-44 rounded-full border-2 border-white/20 shadow-2xl overflow-hidden bg-black ring-4 ring-black/50 cursor-grab active:cursor-grabbing hover:border-blue-500/50 transition-all group"
+                                onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) setFrozenFrame(null); }}
+                                className="absolute bottom-6 right-6 z-[60] w-44 h-44 rounded-full border-2 border-white/20 shadow-2xl overflow-hidden bg-black ring-4 ring-black/50 cursor-grab active:cursor-grabbing hover:border-blue-500/50 shadow-blue-500/20 group"
                                 title="Return to Live Feed"
                             >
-                                <CameraFeed className="w-full h-full" />
+                                <CameraFeed
+                                    className="w-full h-full"
+                                    pipMode
+                                    aspectRatioCorrection={settings.aspectRatio}
+                                    zoom={mainZoom}
+                                    zoomPanOffset={zoomPanOffset}
+                                />
                                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-colors">
                                     <div className="flex flex-col items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]" />
@@ -610,58 +1012,62 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         )}
                     </AnimatePresence>
 
+
+
                     {/* Flash overlay */}
                     <AnimatePresence>
                         {flashActive && (
                             <motion.div
-                                initial={{ opacity: 0.8 }}
-                                animate={{ opacity: 0 }}
-                                exit={{ opacity: 0 }}
+                                initial={{ opacity: 0.8 }} animate={{ opacity: 0 }} exit={{ opacity: 0 }}
                                 transition={{ duration: 0.15 }}
                                 className="absolute inset-0 bg-white z-[70] pointer-events-none"
                             />
                         )}
                     </AnimatePresence>
-                </div>
-            </main>
+                </div >
+            </main >
 
             {/* ═══ RIGHT: TOOLBAR (25%) ═══ */}
-            {!isCompareMode && (
-                <div className="w-[25%] flex flex-col min-w-0 max-h-screen overflow-hidden border-l border-white/5">
-                    <ProcedureToolPanel
-                        patient={patient}
-                        timer={timerRef.current}
-                        timerDisplayRef={timerDisplayRef}
-                        formatTime={formatTime}
-                        onCapture={handleCapture}
-                        onToggleRecording={toggleRecording}
-                        isRecording={isRecording}
-                        zoom={mainZoom}
-                        zoomRange={zoomRange}
-                        onZoomChange={handleZoomChange}
-                        frozenFrame={frozenFrame}
-                        onToggleFreeze={handleToggleFreeze}
-                        isCompareMode={isCompareMode}
-                        onToggleCompare={handleToggleCompare}
-                        segments={segments as any}
-                        activeSegmentIndex={activeSegmentIndex}
-                        onSetActiveSegment={setActiveSegment}
-                        onAddSegment={handleAddSegment}
-                        captures={captures}
-                        onOpenStudio={handleOpenGallery as any}
-                        onPlayVideo={(cap: any) => setPlayingVideo(cap)}
-                        history={history}
-                        comparisonImage={comparisonImage}
-                        onSelectComparisonImage={handleSelectComparisonImage}
-                        onBack={handleBack}
-                        onEndProcedure={() => setShowEndConfirm(true)}
-                        settings={settings}
-                        updateSetting={updateSetting}
-                        historyExpanded={historyExpanded}
-                        setHistoryExpanded={setHistoryExpanded}
-                    />
-                </div>
-            )}
+            {
+                !isCompareMode && (
+                    <div className="w-[25%] flex flex-col min-w-0 max-h-screen overflow-hidden border-l border-white/5">
+                        <ProcedureToolPanel
+                            patient={patient}
+                            timer={segmentTimersRef.current.get(activeSegmentIndex) || 0}
+                            timerDisplayRef={timerDisplayRef}
+                            formatTime={formatTime}
+                            onCapture={handleCapture}
+                            onToggleRecording={toggleRecording}
+                            isRecording={isRecording}
+                            zoom={mainZoom}
+                            zoomRange={zoomRange}
+                            onZoomChange={handleZoomChange}
+                            frozenFrame={frozenFrame}
+                            onToggleFreeze={handleToggleFreeze}
+                            isCompareMode={isCompareMode}
+                            onToggleCompare={handleToggleCompare}
+                            segments={segments as any}
+                            activeSegmentIndex={activeSegmentIndex}
+                            onSetActiveSegment={setActiveSegment}
+                            onAddSegment={handleAddSegment}
+                            captures={captures}
+                            onOpenStudio={handleOpenGallery as any}
+                            onPlayVideo={(cap: any) => setPlayingVideo(cap)}
+                            history={history}
+                            comparisonImage={comparisonImage}
+                            onSelectComparisonImage={handleSelectComparisonImage}
+                            onBack={handleBack}
+                            onEndProcedure={() => setShowEndConfirm(true)}
+                            duration={formatTime(segmentTimersRef.current.get(activeSegmentIndex) || 0)}
+                            settings={settings}
+                            updateSetting={updateSetting}
+                            historyExpanded={historyExpanded}
+                            setHistoryExpanded={setHistoryExpanded}
+                            onOpenScopeSettings={() => setIsScopeSettingsOpen(true)}
+                        />
+                    </div>
+                )
+            }
 
             {/* ═══ MODALS ═══ */}
             <AnimatePresence>
@@ -679,24 +1085,15 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         </motion.div>
                     </div>
                 )}
-
-                {showBackConfirm && (
-                    <div key="back-confirm" className="fixed inset-0 z-[100] bg-black/85 flex items-center justify-center">
-                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }}
-                            className="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl max-w-md w-full text-center shadow-2xl">
-                            <AlertCircle size={48} className="text-amber-500 mx-auto mb-4" />
-                            <h3 className="text-xl font-bold text-white mb-2">Unsaved Session?</h3>
-                            <p className="text-zinc-400 text-sm mb-8">
-                                {isRecording ? "Recording is active." : "You have captured media."} Exiting will return to dashboard.
-                            </p>
-                            <div className="flex gap-4 justify-center">
-                                <button onClick={() => setShowBackConfirm(false)} className="px-6 py-3 rounded-xl bg-zinc-800 text-white font-bold hover:bg-zinc-700">Cancel</button>
-                                <button onClick={() => { if (onBack) onBack(); }} className="px-6 py-3 rounded-xl bg-amber-600 text-black font-bold hover:bg-amber-500">Exit</button>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-
+                <ExitPreviewModal
+                    key="exit-preview-modal"
+                    isOpen={showExitPreview}
+                    onClose={() => setShowExitPreview(false)}
+                    onConfirm={() => { if (onBack) onBack(); }}
+                    captures={captures}
+                    patientName={patient.name || patient.fullName}
+                    duration={formatTime(segmentTimersRef.current.get(activeSegmentIndex) || 0)}
+                />
                 {showRecordingWarning && (
                     <div key="rec-warning" className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
@@ -711,17 +1108,11 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         </div>
                     </div>
                 )}
-
                 {isGalleryOpen && (
-                    <ImageGallery
-                        key="gallery"
-                        isOpen={isGalleryOpen}
+                    <ImageGallery key="gallery" isOpen={isGalleryOpen}
                         images={captures.filter(c => c.type === "image" || !c.type).map(c => ({ id: c.id, filePath: c.url, type: "image", timestamp: c.timestamp } as MediaItem))}
-                        initialIndex={galleryInitialIndex}
-                        onClose={() => setIsGalleryOpen(false)}
-                    />
+                        initialIndex={galleryInitialIndex} onClose={() => setIsGalleryOpen(false)} />
                 )}
-
                 {isPlayingVideo && (
                     <motion.div key="video-player" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                         className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center p-8"
@@ -734,9 +1125,10 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         </motion.div>
                     </motion.div>
                 )}
+                <CustomScopeSettingsInterface key="scope-settings-modal" isOpen={isScopeSettingsOpen} onClose={() => setIsScopeSettingsOpen(false)} isFreezed={!!frozenFrame} />
             </AnimatePresence>
 
             <style jsx global>{`::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #09090b; } ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; } input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: white; cursor: pointer; box-shadow: 0 0 10px rgba(0,0,0,0.5); }`}</style>
-        </div>
+        </div >
     );
 }

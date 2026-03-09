@@ -142,6 +142,7 @@ model Media {
   filePath      String
   thumbnailPath String?
   originId      String?   // [ADDED] Track original image for annotated versions
+  scopeShape    String?   // [ADDED] Track the scope shape used for the capture (circle/square)
   timestamp     DateTime  @default(now())
   
   procedureId   String

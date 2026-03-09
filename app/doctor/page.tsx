@@ -71,6 +71,7 @@ export default function DoctorPage() {
     const [galleryPatient, setGalleryPatient] = useState<any>(null);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isLoadingSession, setIsLoadingSession] = useState(false);
+    const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
 
     // Context States
     const [orgData, setOrgData] = useState<any>(null);
@@ -183,6 +184,23 @@ export default function DoctorPage() {
 
     // --- HANDLERS ---
 
+    const handleToggleFavorite = async (id: string, isFav: boolean) => {
+        // Implementation here if needed
+    };
+
+    const handleEndAndAnnotate = async (p: any, proc: any) => {
+        try {
+            const res = await endProcedure(proc.id);
+            if (res.success) {
+                setQueueRefreshKey(prev => prev + 1);
+                handleCreateReportFromImport(proc.media || [], proc, p);
+            } else {
+                alert("Failed to end procedure: " + res.error);
+            }
+        } catch (e) {
+            console.error("End & Annotate error:", e);
+        }
+    };
     // A. Registration Success (No Auto-Start)
     const handlePatientRegistered = async (patient: any) => {
         // Clear edit state if any
@@ -196,6 +214,7 @@ export default function DoctorPage() {
             await createProcedureFromImports(patient.id, pendingImportFiles, pendingImportName);
             setPendingImportFiles([]);
             setPendingImportName("");
+            setSelectedImageIds([]);
         }
 
         // 2. Reset Layout (Show Queue)
@@ -306,6 +325,7 @@ export default function DoctorPage() {
             createdAt: new Date(),
             type: 'generic'
         });
+        setSelectedImageIds([]);
 
         // 4. Only NOW transition to procedure mode
         console.log("[DoctorPage] Transitioning to procedure mode for procId:", activeProcId);
@@ -366,6 +386,7 @@ export default function DoctorPage() {
             activeSegmentIndex: 1
         });
 
+        setSelectedImageIds([]);
         setMode('annotate');
     };
 
@@ -507,7 +528,7 @@ export default function DoctorPage() {
                     if (displayId) {
                         return (
                             <ProcedureMode
-                                key={displayId} // Explicitly key by procedure ID to reset on real changes
+                                key={activePatient.id} // Key by patient so component stays mounted across segment switches (P1/P2)
                                 procedureId={displayId}
                                 patient={activePatient}
                                 onBack={async () => {
@@ -563,10 +584,12 @@ export default function DoctorPage() {
                     }
                     setMode('suite');
                     setActivePatient(null);
+                    setSelectedImageIds([]);
                     endSession();
                     setQueueRefreshKey(prev => prev + 1);
                 }}
                 onGenerateReport={(selectedIds, templateMap, fullCaptures) => {
+                    setSelectedImageIds(selectedIds);
                     // Use the full capture objects passed from AdvancedImageSuite
                     // which contain proper URLs (including DB-fetched items)
                     const selectedCaptures = fullCaptures && fullCaptures.length > 0
@@ -593,6 +616,7 @@ export default function DoctorPage() {
                     setMode('report');
                 }}
                 procedureId={segments.find(s => s.index === activeSegmentIndex)?.id}
+                initialSelectedIds={selectedImageIds}
             />
         );
     }
@@ -612,8 +636,11 @@ export default function DoctorPage() {
             <ReportPage
                 patient={activePatient}
                 captures={reportCaptures}
-                onBack={() => setMode('suite')}
-                onBackToAnnotate={() => setMode('annotate')}
+                onBack={() => { setMode('suite'); setSelectedImageIds([]); }}
+                onBackToAnnotate={(ids: string[] | undefined) => {
+                    if (ids && Array.isArray(ids)) setSelectedImageIds(ids);
+                    setMode('annotate');
+                }}
                 onComplete={() => {
                     setMode('suite');
                     setActivePatient(null);
@@ -665,6 +692,7 @@ export default function DoctorPage() {
                             }}
                             onStartProcedure={(p: any, procId) => handleStartProcedure(p, procId)}
                             onStartAnnotate={(p: any, proc: any) => handleCreateReportFromImport(proc.media || [], proc, p)}
+                            onEndAndAnnotate={handleEndAndAnnotate}
                             onEditReport={(p: any, proc: any) => {
                                 // Navigate directly to report editor for draft reports
                                 setActivePatient({
@@ -693,6 +721,10 @@ export default function DoctorPage() {
                                         }
                                         // Deduplicate
                                         reportCaps = Array.from(new Map(reportCaps.map((c: any) => [c.id, c])).values());
+
+                                        // Set initial selections from draft
+                                        const initialSelected = reportCaps.filter(c => c.category === 'selected' || c.isSelected).map(c => c.id);
+                                        setSelectedImageIds(initialSelected);
                                     } catch (e) {
                                         console.error("Error parsing draft report:", e);
                                     }

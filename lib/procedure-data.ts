@@ -1,3 +1,6 @@
+// lib/procedure-data.ts
+
+
 "use client";
 
 // =============================================================================
@@ -25,6 +28,7 @@ export interface Capture {
     segmentIndex?: number;
     procedureId?: string;
     dbMediaId?: string;            // The actual DB media ID once saved
+    scopeShape?: "circle" | "square"; // [ADDED] Track the scope shape used for the capture
     uploadStatus: "pending" | "uploading" | "saved" | "failed";
     selected?: boolean;
     deleted?: boolean;
@@ -120,6 +124,7 @@ export async function uploadCapture(
     procedureId: string,
     captureData: string,
     type: "IMAGE" | "VIDEO",
+    scopeShape?: string,
     timestamp?: Date
 ): Promise<UploadResult> {
     try {
@@ -131,6 +136,7 @@ export async function uploadCapture(
                 procedureId,
                 data: captureData,
                 type,
+                scopeShape,
             }),
         });
 
@@ -147,6 +153,7 @@ export async function uploadCapture(
             procedureId,
             type,
             filePath,
+            scopeShape,
             timestamp: timestamp || new Date(),
         });
 
@@ -219,7 +226,7 @@ export async function processPendingUploads(
             if (item.type === "video") {
                 result = await saveVideoReference(realId, item.data, new Date(item.timestamp));
             } else {
-                result = await uploadCapture(realId, item.data, "IMAGE", new Date(item.timestamp));
+                result = await uploadCapture(realId, item.data, "IMAGE", (item as any).scopeShape, new Date(item.timestamp));
             }
 
             if (result.success) {
@@ -267,6 +274,7 @@ export async function fetchExistingMedia(
                         category: `P${seg.index}`,
                         uploadStatus: "saved",
                         dbMediaId: m.id,
+                        scopeShape: (m as any).scopeShape,
                     });
                 }
             }
@@ -287,7 +295,8 @@ export function createCapture(
     data: string,
     type: "image" | "video",
     segmentIndex: number,
-    procedureId: string
+    procedureId: string,
+    scopeShape?: "circle" | "square"
 ): Capture {
     return {
         id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -297,6 +306,7 @@ export function createCapture(
         category: `P${segmentIndex}`,
         segmentIndex,
         procedureId,
+        scopeShape,
         uploadStatus: "pending",
     };
 }

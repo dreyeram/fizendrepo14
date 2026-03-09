@@ -1,18 +1,26 @@
 import jsPDF from 'jspdf';
-import { format } from 'date-fns';
 import { resolveImageUrl } from './utils/image';
 
-// --- Types ---
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 export interface ReportSegment {
     procedureId: string;
     procedureType: string;
     title: string;
     formData: any;
-    selectedImages: (string | { url: string; caption?: string })[];
+    selectedImages: (string | { url: string; caption?: string; scopeShape?: string | null })[];
     imageCaptions: Record<string, string>;
     captures: any[];
     equipment?: { name: string; type: string; serialNumber?: string }[];
-    prescriptions?: { name: string; generic: string; dosage: string; frequency: string; duration: string; instruction: string }[];
+    prescriptions?: {
+        name: string;
+        generic: string;
+        dosage: string;
+        frequency: string;
+        duration: string;
+        instruction: string;
+    }[];
 }
 
 export interface ReportData {
@@ -23,549 +31,728 @@ export interface ReportData {
     action?: 'download' | 'preview' | 'print' | 'share';
 }
 
-// --- CONFIG ---
-const IMG_QUALITY = 1.0; // Max visual quality for printing
-const COMPRESSION = 'SLOW'; // Best quality retention in jsPDF
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE GEOMETRY  — ultra-thin margins to maximise content area
+// ─────────────────────────────────────────────────────────────────────────────
+const IMG_QUALITY = 1.0;
+const COMPRESSION = 'SLOW' as const;
 
-// --- Helper: Load Image as base64 (CORS-safe via fetch) ---
-const loadImage = (url: string, circleMask = false): Promise<{ base64: string; w: number; h: number; error?: string } | null> => {
-    return new Promise(async (resolve) => {
-        if (!url) { resolve({ base64: '', w: 0, h: 0, error: 'No URL' }); return; }
+const PW = 210;          // A4 width  mm
+const PH = 297;          // A4 height mm
+const ML = 5;            // left  margin — as thin as possible
+const MR = 5;            // right margin
+const MT = 4;            // top   margin
+const MB = 3;            // bottom margin
+const CW = PW - ML - MR; // 200 mm usable width
 
-        try {
-            // Helper to process image on canvas
-            const processImage = (img: HTMLImageElement) => {
-                let w = img.width, h = img.height;
-                const MAX = 2400; // High resolution limit for crisp printing
+// Body columns  left 56 % | 2 mm gap | right 44 %
+const COL_GAP = 2;
+const LEFT_W = Math.floor(CW * 0.56);   // ~112 mm
+const RIGHT_W = CW - LEFT_W - COL_GAP;   // ~86 mm
+const RIGHT_X = ML + LEFT_W + COL_GAP;
 
-                // Determine output size (always square if circle mask)
-                let canvasW = w, canvasH = h;
-                if (circleMask) {
-                    canvasW = canvasH = Math.max(w, h);
-                    if (canvasW > MAX) canvasW = canvasH = MAX;
-                } else {
-                    if (w > MAX || h > MAX) {
-                        const r = w / h;
-                        if (w > h) { canvasW = MAX; canvasH = Math.round(MAX / r); }
-                        else { canvasH = MAX; canvasW = Math.round(MAX * r); }
-                    }
-                }
+// ─────────────────────────────────────────────────────────────────────────────
+// COLOURS
+// ─────────────────────────────────────────────────────────────────────────────
+type RGB = [number, number, number];
+const C: Record<string, RGB> = {
+    black: [20, 20, 22],
+    dark: [35, 35, 40],
+    mid: [80, 80, 92],
+    label: [108, 108, 122],
+    muted: [158, 158, 168],
+    line: [210, 212, 222],
+    navy: [18, 42, 108],   // deep navy blue
+    blue: [30, 80, 200],   // vivid blue
+    blueBg: [28, 65, 165],   // report-title pill background
+    white: [255, 255, 255],
+    errBg: [254, 226, 226],
+    errFg: [185, 28, 28],
+};
 
-                const c = document.createElement('canvas');
-                c.width = canvasW; c.height = canvasH;
-                const ctx = c.getContext('2d');
-                if (!ctx) return { base64: url, w, h };
+// ─────────────────────────────────────────────────────────────────────────────
+// IMAGE LOADERS
+// ─────────────────────────────────────────────────────────────────────────────
+interface LoadedImg { base64: string; w: number; h: number; error?: string; }
 
-                // 1. Fill background with white (removes black surroundings on A4)
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, canvasW, canvasH);
-
-                if (circleMask) {
-                    // 2. Apply Circular Clip
-                    ctx.beginPath();
-                    ctx.arc(canvasW / 2, canvasH / 2, canvasW / 2, 0, Math.PI * 2);
-                    ctx.clip();
-
-                    // 3. Fit (Contain) Logic
-                    const ratio = w / h;
-                    let drawW, drawH;
-                    if (ratio > 1) { // Wide
-                        drawW = canvasW;
-                        drawH = drawW / ratio;
-                    } else { // Tall
-                        drawH = canvasH;
-                        drawW = drawH * ratio;
-                    }
-                    ctx.drawImage(img, (canvasW - drawW) / 2, (canvasH - drawH) / 2, drawW, drawH);
-                } else {
-                    ctx.drawImage(img, 0, 0, canvasW, canvasH);
-                }
-
-                try {
-                    return { base64: c.toDataURL('image/jpeg', IMG_QUALITY), w: canvasW, h: canvasH };
-                } catch {
-                    return { base64: url, w, h };
-                }
-            };
-
-            // Load as data URL or fetch
-            let finalUrl = url;
-            if (!url.startsWith('data:')) {
-                const fetchUrl = url.startsWith('/') ? window.location.origin + url : url;
-                const response = await fetch(fetchUrl, { cache: 'no-store', credentials: 'include' });
-                if (!response.ok) {
-                    resolve({ base64: '', w: 100, h: 100, error: `Error ${response.status}` });
-                    return;
-                }
-                const blob = await response.blob();
-                finalUrl = await new Promise((res) => {
-                    const r = new FileReader();
-                    r.onloadend = () => res(r.result as string);
-                    r.readAsDataURL(blob);
-                });
-            }
-
-            const img = new Image();
-            img.onload = () => resolve(processImage(img));
-            img.onerror = () => resolve({ base64: '', w: 100, h: 100, error: 'Load Failed' });
-            img.src = finalUrl;
-        } catch (e: any) {
-            resolve({ base64: '', w: 100, h: 100, error: e.message || 'Error' });
-        }
+const fetchToDataUrl = async (url: string): Promise<string> => {
+    if (url.startsWith('data:')) return url;
+    const abs = url.startsWith('/') ? window.location.origin + url : url;
+    const r = await fetch(abs, { cache: 'no-store', credentials: 'include' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    return new Promise<string>((res) => {
+        const fr = new FileReader();
+        fr.onloadend = () => res(fr.result as string);
+        fr.readAsDataURL(blob);
     });
 };
 
-// ══════════════════════════════════════════════════════════════
-// MAIN PDF GENERATOR — Single A4 Page Per Segment
-// ══════════════════════════════════════════════════════════════
+/**
+ * Shape-aware image loader for PDF generation.
+ *
+ * circle      → PNG with circular alpha mask, transparent outside ring
+ * square      → JPEG, square crop (cover-fit), no mask
+ * rectangle   → JPEG, preserves natural aspect ratio
+ * null/undef  → treated as 'circle' for backward compat
+ */
+const loadShapedImage = (url: string, scopeShape?: string | null): Promise<LoadedImg> =>
+    new Promise(async (resolve) => {
+        if (!url) { resolve({ base64: '', w: 0, h: 0, error: 'no-url' }); return; }
 
+        const shape = scopeShape || 'circle';
+
+        try {
+            const dataUrl = await fetchToDataUrl(url);
+            const img = new Image();
+            img.onload = () => {
+                const sw = img.naturalWidth || img.width || 100;
+                const sh = img.naturalHeight || img.height || 100;
+
+                // Target ~300 DPI for 86mm column width
+                const PRINT_TARGET = 1016;
+                const PRINT_CAP = 1600;
+                const nativeLong = Math.max(sw, sh);
+                const sc = Math.min(Math.max(nativeLong, PRINT_TARGET), PRINT_CAP) / nativeLong;
+
+                if (shape === 'circle') {
+                    // ── Circle: square canvas, circular clip, PNG with alpha ──
+                    const side = Math.round(Math.max(sw, sh) * sc);
+                    const cv = document.createElement('canvas');
+                    cv.width = side;
+                    cv.height = side;
+                    const ctx = cv.getContext('2d', { willReadFrequently: true })!;
+
+                    ctx.clearRect(0, 0, side, side);
+
+                    // Clip to circle
+                    ctx.beginPath();
+                    ctx.arc(side / 2, side / 2, side / 2, 0, Math.PI * 2);
+                    ctx.closePath();
+                    ctx.clip();
+
+                    // Draw image cover-fit centred in the square
+                    const srcAsp = sw / sh;
+                    let dx = 0, dy = 0, dw = side, dh = side;
+                    if (srcAsp > 1) { dh = side / srcAsp; dy = (side - dh) / 2; }
+                    else { dw = side * srcAsp; dx = (side - dw) / 2; }
+
+                    ctx.imageSmoothingEnabled = true;
+                    (ctx as any).imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, dx, dy, dw, dh);
+
+                    resolve({ base64: cv.toDataURL('image/png'), w: side, h: side });
+
+                } else if (shape === 'square') {
+                    // ── Square: square canvas, cover-fit, white bg, JPEG ──
+                    const side = Math.round(Math.max(sw, sh) * sc);
+                    const cv = document.createElement('canvas');
+                    cv.width = side;
+                    cv.height = side;
+                    const ctx = cv.getContext('2d')!;
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, side, side);
+
+                    const srcAsp = sw / sh;
+                    let sx = 0, sy = 0, sWidth = sw, sHeight = sh;
+                    if (srcAsp > 1) { sWidth = sh; sx = (sw - sWidth) / 2; }
+                    else { sHeight = sw; sy = (sh - sHeight) / 2; }
+
+                    ctx.imageSmoothingEnabled = true;
+                    (ctx as any).imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, side, side);
+
+                    resolve({ base64: cv.toDataURL('image/jpeg', 0.95), w: side, h: side });
+
+                } else {
+                    // ── Rectangle: preserve natural aspect ratio, white bg, JPEG ──
+                    const outW = Math.round(sw * sc);
+                    const outH = Math.round(sh * sc);
+                    const cv = document.createElement('canvas');
+                    cv.width = outW;
+                    cv.height = outH;
+                    const ctx = cv.getContext('2d')!;
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, outW, outH);
+                    ctx.imageSmoothingEnabled = true;
+                    (ctx as any).imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, 0, 0, outW, outH);
+
+                    resolve({ base64: cv.toDataURL('image/jpeg', 0.95), w: outW, h: outH });
+                }
+            };
+            img.onerror = () => resolve({ base64: '', w: 0, h: 0, error: 'load-fail' });
+            img.src = dataUrl;
+        } catch (e: any) {
+            resolve({ base64: '', w: 0, h: 0, error: e?.message });
+        }
+    });
+
+/** Plain raster image (no mask) — for logo / signature */
+const loadPlainImage = (url: string): Promise<LoadedImg> =>
+    new Promise(async (resolve) => {
+        if (!url) { resolve({ base64: '', w: 0, h: 0, error: 'no-url' }); return; }
+        try {
+            const dataUrl = await fetchToDataUrl(url);
+            const img = new Image();
+            img.onload = () => {
+                const ow = img.naturalWidth || img.width || 1;
+                const oh = img.naturalHeight || img.height || 1;
+                const MAX = 2400;
+                let cw = ow, ch = oh;
+                if (ow > MAX || oh > MAX) {
+                    if (ow > oh) { cw = MAX; ch = Math.round(MAX * oh / ow); }
+                    else { ch = MAX; cw = Math.round(MAX * ow / oh); }
+                }
+                const cv = document.createElement('canvas');
+                cv.width = cw; cv.height = ch;
+                const ctx = cv.getContext('2d')!;
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, cw, ch);
+                ctx.drawImage(img, 0, 0, cw, ch);
+                resolve({ base64: cv.toDataURL('image/jpeg', IMG_QUALITY), w: ow, h: oh });
+            };
+            img.onerror = () => resolve({ base64: '', w: 0, h: 0, error: 'load-fail' });
+            img.src = dataUrl;
+        } catch (e: any) { resolve({ base64: '', w: 0, h: 0, error: e?.message }); }
+    });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 export const generatePDF = async (data: ReportData): Promise<Blob> => {
     const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+    // Tag document as sRGB so PDF viewers and printers do not auto-convert colours
+    (doc as any).internal.write('/ColorSpace /DeviceRGB');
     const { patient, doctor, hospital, segments } = data;
 
-    // Resolve doctor name (page.tsx sends `name`, editor sends `fullName`)
-    const rawDoctorName = doctor?.fullName || doctor?.name || 'Doctor';
-    const doctorName = rawDoctorName.replace(/^dr\.?\s*/i, '').trim() || rawDoctorName;
-    const doctorDegree = doctor?.degree ? `, ${doctor.degree}` : '';
-    const doctorRole = doctor?.role || 'Consultant Specialist';
+    // ── Doctor display strings ──
+    const rawName = (doctor?.fullName || doctor?.name || 'Doctor').trim();
+    const nameClean = rawName.replace(/^dr\.?\s*/i, '').trim() || rawName;
+    const drDisplay = /^dr\.?\s/i.test(rawName) ? rawName : `Dr. ${nameClean}`;
+    const drDegree = doctor?.degree ? `, ${doctor.degree}` : '';
+    const drFullLine = `${drDisplay}${drDegree}`;
+    const drRole = doctor?.role || 'Consultant Specialist';
 
-    const PW = 210;   // page width
-    const PH = 297;   // page height
-    const M = 10;      // margin
-    const CW = PW - M * 2; // content width
+    // ── Colour shortcuts ──
+    const setT = (c: RGB) => doc.setTextColor(c[0], c[1], c[2]);
+    const setF = (c: RGB) => doc.setFillColor(c[0], c[1], c[2]);
+    const setD = (c: RGB) => doc.setDrawColor(c[0], c[1], c[2]);
+    const lw = (w: number) => doc.setLineWidth(w);
 
-    // Colors
-    const C = {
-        black: [24, 24, 27] as [number, number, number],
-        dark: [39, 39, 42] as [number, number, number],
-        mid: [82, 82, 91] as [number, number, number],
-        label: [113, 113, 122] as [number, number, number],
-        muted: [161, 161, 170] as [number, number, number],
-        line: [220, 220, 225] as [number, number, number],
-        bg: [248, 248, 250] as [number, number, number],
-        blue: [30, 58, 138] as [number, number, number], // #1E3A8A
-        blueLight: [37, 99, 235] as [number, number, number],
-        white: [255, 255, 255] as [number, number, number],
-        errorBg: [254, 226, 226] as [number, number, number], // Red-100
-        errorText: [185, 28, 28] as [number, number, number]  // Red-700
+    // ─────────────────────────────────────────────────────────────────────────
+    // FOOTER GEOMETRY — absolute bottom of page, no separator line
+    // Signature image sits at very bottom right; name + role just above bottom.
+    // Total zone reserved: 16 mm
+    // ─────────────────────────────────────────────────────────────────────────
+    const FOOTER_H = 16;
+    const footerTop = PH - MB - FOOTER_H;   // ≈278 mm
+
+    const drawFooter = async () => {
+        const rx = PW - MR;
+        // No separator line — footer is right-side signature only
+
+        // Signature image — anchored to very bottom-right
+        const SIG_BOTTOM = PH - MB;           // absolute bottom of signature zone
+        let sigH = 0;
+
+        const sigPath = doctor?.signaturePath || doctor?.sign;
+        if (sigPath) {
+            try {
+                const su = resolveImageUrl(sigPath);
+                if (su) {
+                    const sd = await loadPlainImage(su);
+                    if (sd.base64 && !sd.error) {
+                        const maxH = 10, maxW = 44;
+                        const asp = (sd.w || 1) / (sd.h || 1);
+                        let sw2 = maxH * asp, sh2 = maxH;
+                        if (sw2 > maxW) { sw2 = maxW; sh2 = sw2 / asp; }
+                        const sigY = SIG_BOTTOM - sh2 - 5; // sit just above name text
+                        doc.addImage(sd.base64, 'PNG', rx - sw2, sigY, sw2, sh2, undefined, COMPRESSION);
+                        sigH = sh2;
+                    }
+                }
+            } catch (_) { }
+        }
+
+        // Doctor name + role pinned to very bottom right
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        doc.text(drFullLine, rx, SIG_BOTTOM - 4.5, { align: 'right' });
+        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+        doc.text(drRole, rx, SIG_BOTTOM - 0.5, { align: 'right' });
     };
 
-    // ── Shared Helpers ──
-    const setColor = (c: [number, number, number]) => doc.setTextColor(c[0], c[1], c[2]);
-    const setFill = (c: [number, number, number]) => doc.setFillColor(c[0], c[1], c[2]);
-    const setDraw = (c: [number, number, number]) => doc.setDrawColor(c[0], c[1], c[2]);
+    // ─────────────────────────────────────────────────────────────────────────
+    // HEADER — returns Y where body content starts
+    //
+    // ROW 1  (12 mm)  Logo | Hospital name + ALL contact details | Consultant block
+    // Thin navy rule
+    // ROW 2  (12 mm)  Patient cols (left 56%) | Blue report-title pill (right 44%)
+    //
+    // Everything is laid out with hard x-budgets so nothing overlaps.
+    // ─────────────────────────────────────────────────────────────────────────
+    const drawHeader = async (seg: ReportSegment): Promise<number> => {
+        let y = MT;
+        const rx = PW - MR;
 
-    // ── Header: Table-Style Medical Letterhead ──
-    const drawHeader = async (seg?: ReportSegment): Promise<number> => {
-        let y = M;
-        const rx = PW - M;
+        // ════════════════════════════════════════════════════════════
+        // ROW 1  — height 12 mm
+        // Zone A (left):   Logo  — max 46 mm wide, 10 mm tall
+        // Zone B (centre): Hospital name line 1 + contact line 2
+        //                  allowed width = CW - ZoneA - ZoneC
+        // Zone C (right):  Fixed 64 mm — Consultant Name / Role / Date
+        // ════════════════════════════════════════════════════════════
+        const R1H = 12;
+        const ZC_W = 64;          // right zone width
+        const ZC_X = rx - ZC_W;  // right zone left edge
 
-        // Border removed
-        // Let's calculate the content first.
-        const boxTop = y;
-
-        // 1. Hospital Branding (Top Row)
-        const topRowY = y + 4;
-        let logoLoaded = false;
-        const maxLogoHeight = 14;
-        let finalLogoWidth = 14;
-
+        // ── Zone A: Logo ──
+        let logoEndX = ML + 14;
         if (hospital?.logoPath) {
             try {
-                const logoUrl = resolveImageUrl(hospital.logoPath);
-                if (logoUrl) {
-                    const logoData = await loadImage(logoUrl, false);
-                    if (logoData && logoData.base64 && !logoData.error) {
-                        const imgAspect = (logoData.w || 100) / (logoData.h || 100);
-                        finalLogoWidth = maxLogoHeight * imgAspect;
-                        let finalLogoHeight = maxLogoHeight;
-                        const maxAllowedWidth = 60;
-                        if (finalLogoWidth > maxAllowedWidth) {
-                            finalLogoWidth = maxAllowedWidth;
-                            finalLogoHeight = maxAllowedWidth / imgAspect;
-                        }
-                        // Center vertically within the 14mm constrained row
-                        const yOffset = topRowY + (maxLogoHeight - finalLogoHeight) / 2;
-                        doc.addImage(logoData.base64, 'JPEG', M, yOffset, finalLogoWidth, finalLogoHeight, undefined, COMPRESSION);
-                        logoLoaded = true;
+                const lu = resolveImageUrl(hospital.logoPath);
+                if (lu) {
+                    const ld = await loadPlainImage(lu);
+                    if (ld.base64 && !ld.error) {
+                        const maxH = 10, maxW = 46;
+                        const asp = (ld.w || 1) / (ld.h || 1);
+                        let lh2 = maxH, lw2 = lh2 * asp;
+                        if (lw2 > maxW) { lw2 = maxW; lh2 = lw2 / asp; }
+                        const logoY = y + (R1H - lh2) / 2;
+                        doc.addImage(ld.base64, 'JPEG', ML, logoY, lw2, lh2, undefined, COMPRESSION);
+                        logoEndX = ML + lw2 + 2;
                     }
                 }
-            } catch (e) {
-                console.warn('Failed to load org logo for PDF:', e);
+            } catch (_) { }
+        } else {
+            // Monogram fallback
+            setF(C.navy);
+            doc.circle(ML + 6, y + R1H / 2, 5.5, 'F');
+            setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+            doc.text((hospital?.name || 'H').charAt(0).toUpperCase(), ML + 6, y + R1H / 2 + 3, { align: 'center' });
+            logoEndX = ML + 15;
+        }
+
+        // ── Zone B: Hospital name + full contact line ──
+        // Width is whatever sits between logo end and Zone C start, minus 3 mm padding
+        const ZB_X = logoEndX;
+        const ZB_W = ZC_X - ZB_X - 3;
+
+        setT(C.navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+        doc.text((hospital?.name || 'HOSPITAL').toUpperCase(), ZB_X, y + 5);
+
+        // Build full contact string — address | phone | email — all on one line
+        const contactParts = [
+            hospital?.address,
+            hospital?.mobile || hospital?.phone,
+            hospital?.contactEmail || hospital?.email,
+        ].filter(Boolean);
+        const contactStr = contactParts.join('  |  ');
+
+        if (contactStr) {
+            setT(C.mid); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+            // Allow up to 2 lines if contact string is long
+            const contactLines = doc.splitTextToSize(contactStr, ZB_W);
+            // Line 1
+            doc.text(contactLines[0] || '', ZB_X, y + 9.5);
+            // Line 2 (if it wraps) — only if it fits within row height
+            if (contactLines[1]) {
+                doc.text(contactLines[1], ZB_X, y + 12.5);
             }
         }
 
-        if (!logoLoaded) {
-            const firstLetter = (hospital?.name || 'M').charAt(0).toUpperCase();
-            setFill(C.blue);
-            doc.circle(M + 10, topRowY + 7, 7, 'F');
-            setColor(C.white);
-            doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
-            doc.text(firstLetter, M + 10, topRowY + 12, { align: 'center' });
-        }
+        // ── Zone C: Consultant Name / Role / Report Date ──
+        const repDate = new Date();
+        const dateStr = repDate
+            .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+            .toUpperCase()
+            + '  '
+            + repDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-        // Hospital Name & Address (Middle-left)
-        const textX = M + finalLogoWidth + 8;
-        setColor(C.black);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(13); // Downsized to prevent overlap
-        doc.text((hospital?.name || 'PREDISCAN HOSPITAL').toUpperCase(), textX, topRowY + 5);
+        // Labels (left-aligned in zone)
+        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+        doc.text('Consultant Name:', ZC_X, y + 3.5);
+        doc.text('Report Date:', ZC_X, y + 10);
 
-        setColor(C.black); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
-        doc.text(hospital?.address || 'IITM Research Park, Chennai', textX, topRowY + 10.5);
+        // Values (right-aligned to page edge)
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+        doc.text(drFullLine, rx, y + 3.5, { align: 'right' });
 
-        // Contact Info (Right)
-        setColor(C.black); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        if (hospital?.mobile || hospital?.phone) {
-            doc.text(`Contact: ${hospital?.mobile || hospital?.phone || '+91 7339286710'}`, rx - 4, topRowY + 5, { align: 'right' });
-        }
-        if (hospital?.contactEmail || hospital?.email || hospital?.contactEmail !== undefined) {
-            doc.text(`Mail:  ${hospital?.contactEmail || hospital?.email || 'prediscan@gmail.com'}`, rx - 4, topRowY + 10.5, { align: 'right' });
-        }
+        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+        doc.text(drRole, rx, y + 7, { align: 'right' });
 
-        y = topRowY + 16;
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+        doc.text(dateStr, rx, y + 11, { align: 'right' });
 
-        // Horizontal Divider
-        setDraw([30, 30, 30]); doc.setLineWidth(0.4);
-        doc.line(M, y, rx, y);
+        y += R1H;
 
-        // 2. Bottom Row: Patient Demographics Table & Report Info
-        y += 4;
-        const gridStartX = M;
-        const labelW = 20;
-        const colonX = gridStartX + labelW;
-        const valX = colonX + 3;
-        let pY = y;
+        // ── Thin navy divider ──
+        setD(C.navy); lw(0.5);
+        doc.line(ML, y, rx, y);
+        y += 1.5;
 
-        const drawRow = (label: string, value: string) => {
-            setColor([60, 60, 65]); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-            doc.text(label, gridStartX, pY + 3);
-            setColor([30, 30, 30]); doc.text(':', colonX, pY + 3);
-            doc.setFont('helvetica', 'bold');
-            doc.text(value, valX, pY + 3);
-            pY += 4.5;
-        };
+        // ════════════════════════════════════════════════════════════
+        // ROW 2  — height 12 mm
+        // Left 56 %:  4 patient demographic columns
+        // Right 44 %: Blue report-title pill (same row height)
+        // ════════════════════════════════════════════════════════════
+        const R2H = 10;                           // row height — compact
+        const DEMO_W = Math.floor(CW * 0.56);       // ~112 mm patient cols
+        const PILL_X = ML + DEMO_W + 2;             // 2 mm gap
+        const PILL_W = rx - PILL_X;
+        const PILL_H = 7;                            // pill shorter than row — vertically centred
+        const PILL_Y = y + (R2H - PILL_H) / 2;      // centre pill within row
 
-        drawRow('MRN No', patient?.mrn || 'N/A');
-        drawRow('Name', (patient?.fullName || patient?.name || 'PATIENT').toUpperCase());
-        drawRow('Age/Sex', `${patient?.age || '--'} Years/${patient?.gender || '--'}`);
-        drawRow('Address', (patient?.address || 'N/A').toUpperCase());
+        // Patient columns
+        const demoCols = [
+            { label: 'MRN No', value: patient?.mrn || 'N/A' },
+            { label: 'Name', value: (patient?.fullName || patient?.name || 'N/A').toUpperCase() },
+            { label: 'Age/Sex', value: `${patient?.age || '--'} Yrs / ${patient?.gender || '--'}` },
+            { label: 'Ref', value: (patient?.referringDoctor || 'N/A').toUpperCase() },
+        ];
+        const demoColW = DEMO_W / demoCols.length;
+        demoCols.forEach((col, i) => {
+            const cx = ML + i * demoColW;
+            setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
+            doc.text(col.label, cx, y + 3);
+            setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            const truncated = doc.splitTextToSize(col.value, demoColW - 1)[0] || col.value;
+            doc.text(truncated, cx, y + 8);
+        });
 
-        const rd = new Date();
-        const repDateStr = `${rd.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, ' ')}/${rd.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
-        drawRow('Report Date', repDateStr.toUpperCase());
-        drawRow('Ref', (patient?.referringDoctor || 'N/A').toUpperCase());
+        // Blue report-title pill — compact, vertically centred in row
+        setF(C.blueBg);
+        doc.roundedRect(PILL_X, PILL_Y, PILL_W, PILL_H, 1.5, 1.5, 'F');
 
-        // Right side: Blue Pill & Doctor Info
-        // Blue Pill
-        const pillW = 80;
-        const pillH = 7;
-        const pillX = rx - pillW;
-        const pillY = y + 1;
-        setFill([31, 58, 138]); // Deep blue
-        doc.roundedRect(pillX, pillY, pillW, pillH, 1.5, 1.5, 'F');
+        setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+        const titleRaw = (seg.title || 'DIAGNOSTIC ENDOSCOPY REPORT').toUpperCase();
+        const titleLines = doc.splitTextToSize(titleRaw, PILL_W - 5);
+        const tLineH = 3.8;
+        const tTotalH = Math.min(titleLines.length, 2) * tLineH;
+        const tStartY = PILL_Y + (PILL_H - tTotalH) / 2 + tLineH - 0.8;
+        titleLines.slice(0, 2).forEach((line: string, li: number) => {
+            doc.text(line, PILL_X + PILL_W / 2, tStartY + li * tLineH, { align: 'center' });
+        });
 
-        setColor(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
-        const reportTitle = (seg?.title || 'DIAGNOSTIC NASAL ENDOSCOPY REPORT').toUpperCase();
-        doc.text(reportTitle, pillX + pillW / 2, pillY + 5.2, { align: 'center' });
+        y += R2H + 5;   // 5 mm gap before body — breathing room after demographics
 
-        // Doctor Details
-        const drY = pillY + pillH + 6;
-
-        const doctorRole = doctor?.role || 'Consultant Specialist';
-        const doctorDegree = doctor?.degree ? `, ${doctor.degree}` : '';
-        const hasDrPrefix = doctorName.toLowerCase().startsWith('dr');
-        const formattedDrName = hasDrPrefix ? doctorName : `Dr. ${doctorName}`;
-
-        const docNameStr = `${formattedDrName}${doctorDegree}`;
-        // Calculate text width to properly align the 'Consultant Name :' label
-        const docNameWidth = doc.getStringUnitWidth(docNameStr) * 8.5 / doc.internal.scaleFactor;
-
-        setColor([60, 60, 65]); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-        doc.text('Consultant Name :', rx - docNameWidth - 2, drY + 3, { align: 'right' });
-
-        setColor(C.black); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        doc.text(docNameStr, rx, drY + 3, { align: 'right' });
-
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-        doc.text(doctorRole, rx, drY + 8, { align: 'right' });
-
-        const headerBottom = Math.max(pY, drY + 10) + 2;
-
-        return headerBottom + 6;
+        return y;
     };
 
-    // ── Footer: Signature Block ──
-    const drawFooter = async () => {
-        const fy = PH - 25; // Moved further down to prevent overlap
-        const rx = PW - M;
-
-        // Try to load and render signature image
-        let signatureDrawn = false;
-        if (doctor?.signaturePath || doctor?.sign) {
-            try {
-                const sigPath = doctor.signaturePath || doctor.sign;
-                const sigUrl = resolveImageUrl(sigPath);
-                if (sigUrl) {
-                    const sigData = await loadImage(sigUrl, false);
-                    if (sigData && sigData.base64 && !sigData.error) {
-                        const maxH = 10;
-                        const maxW = 40;
-                        const aspect = (sigData.w || 100) / (sigData.h || 50);
-                        let drawW = maxH * aspect;
-                        let drawH = maxH;
-                        if (drawW > maxW) { drawW = maxW; drawH = maxW / aspect; }
-                        const sigX = rx - drawW;
-                        const sigY = fy + 8 - drawH;
-                        doc.addImage(sigData.base64, 'PNG', sigX, sigY, drawW, drawH, undefined, COMPRESSION);
-                        signatureDrawn = true;
-                    }
-                }
-            } catch (e) {
-                console.warn('Failed to load signature for PDF:', e);
-            }
-        }
-
-        // Signature dashed line
-        setDraw([180, 180, 185]); doc.setLineWidth(0.3); doc.setLineDashPattern([2, 2], 0);
-        doc.line(rx - 50, fy + 8, rx, fy + 8);
-        doc.setLineDashPattern([], 0);
-
-        if (!signatureDrawn) {
-            setColor([200, 200, 205]); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
-            doc.text('SIGNATURE PLACEHOLDER', rx - 25, fy + 6.5, { align: 'center' });
-        }
-
-        setColor(C.black); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
-        const hasDrPrefix = doctorName.toLowerCase().startsWith('dr');
-        const formattedDrName = hasDrPrefix ? doctorName : `Dr. ${doctorName}`;
-        doc.text(`${formattedDrName}${doctorDegree}`, rx, fy + 13, { align: 'right' });
-
-        setColor(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-        doc.text(doctorRole, rx, fy + 17, { align: 'right' });
-    };
-
-    // ══════════════════════════════════════════════════════════
-    // SEGMENT LOOP
-    // ══════════════════════════════════════════════════════════
+    // ─────────────────────────────────────────────────────────────────────────
+    // SEGMENT LOOP — one page per segment
+    // ─────────────────────────────────────────────────────────────────────────
     for (let si = 0; si < segments.length; si++) {
         if (si > 0) doc.addPage();
         const seg = segments[si];
 
-        // 1. Preload images
-        const loadedImages: { base64: string; w: number; h: number; caption: string; error?: string }[] = [];
-        for (const input of seg.selectedImages) {
-            let url = '', caption = '';
-            if (typeof input === 'string') {
-                // ID reference → look up in captures
-                const found = seg.captures?.find((x: any) => x.id === input);
-                if (found) { url = found.url; caption = seg.imageCaptions?.[input] || ''; }
-            } else {
-                // Direct object with url
-                url = input.url || '';
-                caption = input.caption || '';
-            }
-            // Always try to load, even if URL is empty (loadImage handles it)
-            const resolvedUrl = resolveImageUrl(url);
-            const loaded = await loadImage(resolvedUrl || '', true); // apply circle mask
-            if (loaded) loadedImages.push({ ...loaded, caption });
-        }
-
-        let y = await drawHeader();
-
-        // Removed duplicate Report Title string since it's already generated within the blue pill
-        y += 2;
-
-        // ── Two Column Layout ──
-        const gap = 4;
-        const leftW = CW * 0.62;
-        const rightW = CW - leftW - gap;
-        const rightX = M + leftW + gap;
-        const contentStartY = y;
-
-        // ────────────────────────────────────────────
-        // RIGHT COLUMN: Images (max 6, compact)
-        // ────────────────────────────────────────────
-        let imgY = contentStartY;
-        const maxFooterY = PH - 35; // Reserve footer space / Prevent overwrite
-        const maxImages = Math.min(loadedImages.length, 6);
-
-        for (let i = 0; i < maxImages; i++) {
-            const img = loadedImages[i];
-
-            // Diameter of circular frame
-            const diameter = rightW - 2;
-            const radius = diameter / 2;
-
-            // Cap height to fit remaining space for 6 images
-            const remainingSpace = maxFooterY - imgY - (maxImages - i) * 6;
-            const maxH = Math.min(remainingSpace / (maxImages - i), 38);
-            const frameH = Math.max(Math.min(diameter, maxH), 12); // Minimum 12mm size
-            const frameW = frameH; // Square frame for circle
-
-            const xOff = (rightW - frameW) / 2;
-            const cx = rightX + xOff + frameW / 2;
-            const cy = imgY + frameH / 2;
-
-            if (img.error) {
-                // Render Error Placeholder
-                setFill(C.errorBg);
-                doc.circle(cx, cy, frameH / 2, 'F');
-                setDraw(C.errorText);
-                doc.circle(cx, cy, frameH / 2, 'S');
-
-                setColor(C.errorText); doc.setFontSize(5);
-                doc.text("Error", cx, cy, { align: 'center' });
-            } else {
-                try {
-                    // Draw Image (already masked and scaled by canvas)
-                    doc.addImage(img.base64, 'JPEG', xOff + rightX, imgY, frameW, frameH, undefined, COMPRESSION);
-
-                    // Small index badge
-                    setFill(C.black);
-                    const bx = cx - frameW / 2 + 1;
-                    const by = cy - frameH / 2 + 1;
-                    doc.roundedRect(bx, by, 4, 3, 1, 1, 'F');
-                    setColor(C.white); doc.setFontSize(6); doc.setFont('helvetica', 'bold');
-                    doc.text(`${i + 1}`, bx + 2, by + 2.2, { align: 'center' });
-
-                } catch (e: any) {
-                    console.warn('PDF image error', e);
-                    setDraw(C.line);
-                    doc.circle(cx, cy, frameH / 2, 'S');
-                    setColor(C.muted); doc.setFontSize(6);
-                    doc.text("Render Error", cx, cy, { align: 'center' });
+        // ── Pre-load images with shape awareness ──
+        const imgs: { base64: string; caption: string; scopeShape: string; error?: string }[] = [];
+        for (const inp of seg.selectedImages) {
+            let url = '', caption = '', scopeShape = 'circle';
+            if (typeof inp === 'string') {
+                const cap = seg.captures?.find((x: any) => x.id === inp);
+                if (cap) {
+                    url = cap.url || '';
+                    caption = seg.imageCaptions?.[inp] || '';
+                    scopeShape = cap.scopeShape || 'circle';
                 }
+            } else {
+                url = inp.url || '';
+                caption = inp.caption || '';
+                scopeShape = (inp as any).scopeShape || 'circle';
             }
-
-            imgY += frameH + 3;
-
-            const defaultCaption = `Fig ${i + 1}`;
-            const displayCaption = img.caption ? `${defaultCaption}: ${img.caption}` : defaultCaption;
-
-            setColor(C.muted); doc.setFont('helvetica', 'italic'); doc.setFontSize(5.5);
-            // Wrap caption if too long
-            const captionLines = doc.splitTextToSize(displayCaption, rightW - 2);
-            doc.text(captionLines, rightX + rightW / 2, imgY, { align: 'center' });
-            imgY += captionLines.length * 2.5 + 1;
+            const resolved = url ? (resolveImageUrl(url) || '') : '';
+            const ld = await loadShapedImage(resolved, scopeShape);
+            imgs.push({ base64: ld.base64, caption, scopeShape, error: ld.error });
         }
 
+        // ── Draw header, get body start Y ──
+        const bodyY = await drawHeader(seg);
 
-        // ────────────────────────────────────────────
-        // LEFT COLUMN: Form fields
-        // ────────────────────────────────────────────
-        let textY = contentStartY;
-        const sections = seg.formData?.printableSections || [];
-        const labelCol = M;
-        const valCol = M + 40;
-        const valWidth = leftW - 40;
+        // LEFT column extends to absolute page bottom — footer is right-side only
+        // RIGHT column stops above signature zone
+        const LEFT_BOTTOM = PH - MB;          // full page for left content
+        const RIGHT_BOTTOM = footerTop - 1;    // right stops above signature
+        const LEFT_BODY_H = LEFT_BOTTOM - bodyY;
+        const RIGHT_BODY_H = RIGHT_BOTTOM - bodyY;
+        // Keep a unified alias for the left column measurement
+        const BODY_H = LEFT_BODY_H;
 
-        for (const section of sections) {
-            const hasData = section.items?.some((it: any) =>
-                it.value && String(it.value).trim() && it.value !== 'undefined'
+        // ═════════════════════════════════════════════════════════════════════
+        // RIGHT COLUMN — shape-aware image rendering
+        // ═════════════════════════════════════════════════════════════════════
+        const maxImgs = Math.min(imgs.length, 6);
+        const CAP_H = 5.0;
+        const IMG_GAP = 2.0;
+
+        if (maxImgs > 0) {
+            const totalGaps = (maxImgs - 1) * IMG_GAP;
+            const totalCaps = maxImgs * CAP_H;
+            const availH = RIGHT_BODY_H - totalGaps - totalCaps;
+            const slotSize = Math.min(RIGHT_W, Math.max(10, availH / maxImgs));
+            const xCenter = RIGHT_X + RIGHT_W / 2;
+
+            let imgY = bodyY;
+            for (let i = 0; i < maxImgs; i++) {
+                const img = imgs[i];
+                const shape = img.scopeShape || 'circle';
+
+                let renderW: number, renderH: number;
+                if (shape === 'rectangle') {
+                    renderW = RIGHT_W;
+                    renderH = Math.min(Math.round(RIGHT_W * 9 / 16), slotSize);
+                } else {
+                    renderW = slotSize;
+                    renderH = slotSize;
+                }
+
+                const xStart = RIGHT_X + (RIGHT_W - renderW) / 2;
+                const cy = imgY + renderH / 2;
+
+                if (!img.base64 || img.error) {
+                    setF(C.errBg);
+                    if (shape === 'circle') {
+                        doc.circle(xCenter, cy, renderW / 2, 'F');
+                        setD(C.errFg); lw(0.3); doc.circle(xCenter, cy, renderW / 2, 'S');
+                    } else {
+                        const r = shape === 'square' ? 2 : 1;
+                        doc.roundedRect(xStart, imgY, renderW, renderH, r, r, 'F');
+                        setD(C.errFg); lw(0.3); doc.roundedRect(xStart, imgY, renderW, renderH, r, r, 'S');
+                    }
+                    setT(C.errFg); doc.setFont('helvetica', 'italic'); doc.setFontSize(6.5);
+                    doc.text('No Image', xCenter, cy + 2, { align: 'center' });
+                } else {
+                    const imgFmt = shape === 'circle' ? 'PNG' : 'JPEG';
+                    doc.addImage(
+                        img.base64, imgFmt,
+                        xStart, imgY, renderW, renderH,
+                        `img_${si}_${i}`, 'FAST'
+                    );
+                }
+
+                // Index badge
+                const bx = xStart + 0.8, by = imgY + 0.8;
+                setF(C.navy); doc.roundedRect(bx, by, 5.5, 3.8, 1, 1, 'F');
+                setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
+                doc.text(`${i + 1}`, bx + 2.75, by + 3, { align: 'center' });
+
+                // Caption
+                const capTxt = img.caption ? `Fig ${i + 1}: ${img.caption}` : `Fig ${i + 1}`;
+                setT(C.muted); doc.setFont('helvetica', 'italic'); doc.setFontSize(6.5);
+                doc.text(
+                    doc.splitTextToSize(capTxt, RIGHT_W - 2)[0] || capTxt,
+                    xCenter, imgY + renderH + 4,
+                    { align: 'center' }
+                );
+
+                imgY += renderH + CAP_H + (i < maxImgs - 1 ? IMG_GAP : 0);
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // LEFT COLUMN — form sections + prescriptions
+        //
+        // ALL text is strictly clipped to LEFT_W (ML → ML+LEFT_W).
+        // Nothing may cross into RIGHT_X.
+        // Adaptive font scaling guarantees everything fits in LEFT_BODY_H.
+        // ═════════════════════════════════════════════════════════════════════
+        const sections = (seg.formData?.printableSections || []) as any[];
+        const rxList = seg.prescriptions || [];
+
+        // Hard column boundaries — never exceed these
+        const LABEL_X = ML;                        // left edge
+        const LEFT_EDGE = ML;
+        const LEFT_EDGE_R = ML + LEFT_W;             // hard right boundary of left column
+        const LBL_W = 36;                        // label column width mm
+        const VAL_X = LEFT_EDGE + LBL_W;        // value starts here
+        const VAL_W = LEFT_EDGE_R - VAL_X - 1;  // value width — guaranteed within left col
+
+        // Bilateral layout: split VAL_W into two equal halves
+        const BI_HALF_W = (VAL_W / 2) - 6;         // each R/L value width
+        const BI_R_X = VAL_X;
+        const BI_L_X = VAL_X + VAL_W / 2 + 1;
+
+        // Prescription layout — all within LEFT_EDGE_R
+        const RX_NAME_MAX = 38;                      // max width for medicine name
+        const RX_GEN_MAX = 28;                      // max width for generic name
+        const RX_DTL_X = LEFT_EDGE + RX_NAME_MAX + RX_GEN_MAX + 4;
+        const RX_DTL_W = LEFT_EDGE_R - RX_DTL_X - 1;
+        const RX_INS_MAX = 28;                      // instruction truncated at end
+
+        // Default font sizes
+        let fsSec = 8.0;
+        let fsLbl = 7.0;
+        let fsVal = 8.5;
+        let lh = 4.0;
+        const SEC_GAP = 2.0;
+        const HEAD_H = () => fsSec * 0.35 + 2.8;
+
+        // Measure total rendered height with current font vars
+        const measureAll = (): number => {
+            let h = 0;
+            for (const sec of sections) {
+                const hasData = sec.items?.some(
+                    (it: any) => it.value && String(it.value).trim() && it.value !== 'undefined'
+                );
+                if (!hasData) continue;
+                h += HEAD_H();
+                for (const item of sec.items) {
+                    const val = String(item.value || '').trim();
+                    if (!val || val === 'undefined') continue;
+                    doc.setFontSize(fsVal);
+                    if (item.type === 'bilateral' && item.rawValue) {
+                        const rl = doc.splitTextToSize(String(item.rawValue.right || '—'), BI_HALF_W).length;
+                        const ll = doc.splitTextToSize(String(item.rawValue.left || '—'), BI_HALF_W).length;
+                        h += Math.max(rl, ll) * lh + 0.4;
+                    } else {
+                        h += doc.splitTextToSize(val, VAL_W).length * lh + 0.4;
+                    }
+                }
+                h += SEC_GAP;
+            }
+            if (rxList.length > 0) {
+                h += HEAD_H();
+                h += rxList.length * (lh + 0.4);
+            }
+            return h;
+        };
+
+        // Iterative shrink — up to 15 passes
+        for (let iter = 0; iter < 15; iter++) {
+            if (measureAll() <= LEFT_BODY_H) break;
+            const ratio = (LEFT_BODY_H / measureAll()) * 0.97;
+            fsSec = Math.max(5.5, fsSec * ratio);
+            fsLbl = Math.max(5.0, fsLbl * ratio);
+            fsVal = Math.max(6.0, fsVal * ratio);
+            lh = Math.max(3.0, lh * ratio);
+        }
+
+        // ── Render sections ──
+        let tY = bodyY;
+
+        for (const sec of sections) {
+            const hasData = sec.items?.some(
+                (it: any) => it.value && String(it.value).trim() && it.value !== 'undefined'
             );
             if (!hasData) continue;
 
-            // Section heading
-            setColor(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
-            doc.text(section.title.toUpperCase(), labelCol, textY);
+            // Section heading + underline — clipped to LEFT_EDGE_R
+            setT(C.navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(fsSec);
+            const secTitle = sec.title.toUpperCase();
+            doc.text(secTitle, LABEL_X, tY);
+            const tw = doc.getStringUnitWidth(secTitle) * fsSec / doc.internal.scaleFactor;
+            setD(C.blue); lw(0.2);
+            doc.line(LABEL_X, tY + 0.9, LABEL_X + Math.min(tw, LEFT_W), tY + 0.9);
+            tY += HEAD_H();
 
-            // Underline heading
-            const titleWidth = doc.getStringUnitWidth(section.title.toUpperCase()) * 7.5 / doc.internal.scaleFactor;
-            setDraw(C.mid); doc.setLineWidth(0.2);
-            doc.line(labelCol, textY + 1.5, labelCol + titleWidth, textY + 1.5);
+            for (const item of sec.items) {
+                const val = String(item.value || '').trim();
+                if (!val || val === 'undefined') continue;
 
-            textY += 4;
+                // Label — strictly within LBL_W
+                setT(C.label); doc.setFont('helvetica', 'bold'); doc.setFontSize(fsLbl);
+                const lblTxt = doc.splitTextToSize(`${item.label}:`, LBL_W - 1)[0] || `${item.label}:`;
+                doc.text(lblTxt, LABEL_X + 1, tY);
 
-            for (const item of section.items) {
-                const val = String(item.value || '');
-                if (!val || val === 'undefined' || !val.trim()) continue;
-
-                // Label
-                setColor(C.label); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
-                doc.text(item.label + ':', labelCol + 2, textY);
-
-                // Value rendering
                 if (item.type === 'bilateral' && item.rawValue) {
-                    const rv = String(item.rawValue.right || '—');
-                    const lv = String(item.rawValue.left || '—');
-                    const halfW = valWidth / 2;
+                    // R value
+                    setT(C.blue); doc.setFont('helvetica', 'bold'); doc.setFontSize(fsLbl);
+                    doc.text('R:', BI_R_X, tY);
+                    setT(C.dark); doc.setFont('times', 'normal'); doc.setFontSize(fsVal);
+                    const rLines = doc.splitTextToSize(String(item.rawValue.right || '—'), BI_HALF_W);
+                    doc.text(rLines, BI_R_X + 5, tY);
 
-                    // Right side
-                    setColor(C.blue); doc.setFont('helvetica', 'bold'); doc.setFontSize(7);
-                    doc.text('R:', valCol, textY);
+                    // L value
+                    setT(C.blue); doc.setFont('helvetica', 'bold'); doc.setFontSize(fsLbl);
+                    doc.text('L:', BI_L_X, tY);
+                    setT(C.dark); doc.setFont('times', 'normal'); doc.setFontSize(fsVal);
+                    const lLines = doc.splitTextToSize(String(item.rawValue.left || '—'), BI_HALF_W);
+                    doc.text(lLines, BI_L_X + 5, tY);
 
-                    setColor(C.black); doc.setFont('times', 'normal'); doc.setFontSize(8.5);
-                    const rLines = doc.splitTextToSize(rv, halfW - 6);
-                    doc.text(rLines, valCol + 6, textY);
-
-                    // Left side
-                    setColor(C.blue); doc.setFont('helvetica', 'bold'); doc.setFontSize(7);
-                    doc.text('L:', valCol + halfW, textY);
-
-                    setColor(C.black); doc.setFont('times', 'normal'); doc.setFontSize(8.5);
-                    const lLines = doc.splitTextToSize(lv, halfW - 6);
-                    doc.text(lLines, valCol + halfW + 6, textY);
-
-                    textY += Math.max(rLines.length, lLines.length) * 3.5 + 1;
+                    tY += Math.max(rLines.length, lLines.length) * lh + 0.4;
                 } else {
-                    // Standard Value
-                    setColor(C.black); doc.setFont('times', 'normal'); doc.setFontSize(8.5);
-                    const lines = doc.splitTextToSize(val, valWidth);
-                    doc.text(lines, valCol, textY);
-                    textY += lines.length * 3.5 + 1;
+                    // Standard value — strictly within VAL_W
+                    setT(C.dark); doc.setFont('times', 'normal'); doc.setFontSize(fsVal);
+                    const lines = doc.splitTextToSize(val, VAL_W);
+                    doc.text(lines, VAL_X, tY);
+                    tY += lines.length * lh + 0.4;
                 }
-
-                // Safety: don't overflow into footer
-                if (textY > maxFooterY - 3) break;
             }
-            textY += 2;
-            if (textY > maxFooterY - 3) break;
+            tY += SEC_GAP;
         }
 
-        // ── Prescription (compact, below form fields) ──
-        let bottomY = Math.max(textY, imgY) + 2;
+        // ── Prescriptions — all content strictly within LEFT_EDGE_R ──
+        if (rxList.length > 0) {
+            setT(C.navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(fsSec);
+            doc.text('PRESCRIPTION / Rx', LABEL_X, tY);
+            const ptw = doc.getStringUnitWidth('PRESCRIPTION / Rx') * fsSec / doc.internal.scaleFactor;
+            setD(C.blue); lw(0.2);
+            doc.line(LABEL_X, tY + 0.9, LABEL_X + Math.min(ptw, LEFT_W), tY + 0.9);
+            tY += HEAD_H();
 
-        if (seg.prescriptions && seg.prescriptions.length > 0 && bottomY < maxFooterY - 10) {
-            let rxY = bottomY;
+            for (const rx of rxList) {
+                const fsRxVal = Math.max(fsVal - 0.5, 6.0);
+                const fsRxSml = Math.max(fsLbl - 0.5, 5.0);
 
-            setColor(C.blue); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
-            doc.text('PRESCRIPTION / RX', M, rxY);
+                // ── Single line layout: [Name] [(generic)]   [dose · freq · dur]   [instruction] ──
+                // All elements on exactly one line, all within LEFT_EDGE_R.
+                // Widths are fixed so nothing overflows or wraps.
+                const RX_LINE_NAME_W = 30;   // medicine name zone
+                const RX_LINE_GEN_W = 22;   // generic name zone
+                const RX_LINE_DTL_X = LEFT_EDGE + RX_LINE_NAME_W + RX_LINE_GEN_W + 2;
+                const RX_LINE_INS_W = 26;   // instruction zone at right
+                const RX_LINE_INS_X = LEFT_EDGE_R - RX_LINE_INS_W;
+                const RX_LINE_DTL_W = RX_LINE_INS_X - RX_LINE_DTL_X - 2;
 
-            // Underline heading
-            const titleWidth = doc.getStringUnitWidth('PRESCRIPTION / RX') * 7.5 / doc.internal.scaleFactor;
-            setDraw(C.mid); doc.setLineWidth(0.2);
-            doc.line(M, rxY + 1.5, M + titleWidth, rxY + 1.5);
+                // Medicine name
+                setT(C.dark); doc.setFont('times', 'bold'); doc.setFontSize(fsRxVal);
+                doc.text(
+                    doc.splitTextToSize(rx.name || 'Medicine', RX_LINE_NAME_W)[0] || '',
+                    LEFT_EDGE, tY
+                );
 
-            rxY += 4;
+                // Generic — inline, right after name zone
+                if (rx.generic) {
+                    setT(C.muted); doc.setFont('times', 'italic'); doc.setFontSize(fsRxSml);
+                    doc.text(
+                        doc.splitTextToSize(`(${rx.generic})`, RX_LINE_GEN_W)[0] || '',
+                        LEFT_EDGE + RX_LINE_NAME_W + 1, tY
+                    );
+                }
 
-            for (const rx of seg.prescriptions) {
-                if (rxY > maxFooterY - 4) break;
+                // Dosage · frequency · duration
+                const details = [rx.dosage, rx.frequency, rx.duration].filter(Boolean).join(' · ');
+                if (details && RX_LINE_DTL_W > 4) {
+                    setT(C.mid); doc.setFont('times', 'normal'); doc.setFontSize(fsRxSml);
+                    doc.text(
+                        doc.splitTextToSize(details, RX_LINE_DTL_W)[0] || '',
+                        RX_LINE_DTL_X, tY
+                    );
+                }
 
-                setColor(C.black); doc.setFont('times', 'bold'); doc.setFontSize(7.5);
-                const medName = rx.name || 'Medicine';
-                doc.text(medName, M, rxY);
-
-                setColor(C.muted); doc.setFont('times', 'italic'); doc.setFontSize(6);
-                doc.text(`(${rx.generic || ''})`, M + doc.getTextWidth(medName) + 1.5, rxY);
-
-                setColor(C.mid); doc.setFont('times', 'normal'); doc.setFontSize(7);
-                doc.text(`${rx.dosage || ''} • ${rx.frequency || ''} • ${rx.duration || ''}`, M + 60, rxY);
-
+                // Instruction — right-most zone, same line
                 if (rx.instruction) {
-                    doc.text(rx.instruction, M + 110, rxY);
+                    setT(C.label); doc.setFont('times', 'italic'); doc.setFontSize(fsRxSml);
+                    doc.text(
+                        doc.splitTextToSize(rx.instruction, RX_LINE_INS_W)[0] || '',
+                        RX_LINE_INS_X, tY
+                    );
                 }
-                rxY += 3.5;
+
+                tY += lh + 0.4;
             }
         }
 
+        // ── Footer ──
         await drawFooter();
     }
 
-    // Output
+    // ── Output ──
     if (data.action === 'download') {
-        doc.save(`${patient?.fullName || patient?.name || 'Report'}_Report.pdf`);
-    } else if (data.action === 'print') {
-        return doc.output('blob');
+        const safe = (patient?.fullName || patient?.name || 'Report')
+            .replace(/[^a-z0-9_\- ]/gi, '_');
+        doc.save(`${safe}_Report.pdf`);
     }
     return doc.output('blob');
 };
