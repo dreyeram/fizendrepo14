@@ -1,69 +1,143 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Search, Play, Users, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight } from "lucide-react";
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "framer-motion";
+import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
 import { exportPatientsAction } from "@/app/actions/export";
+import { getSystemStatus } from "@/app/actions/system";
 import { cn } from "@/lib/utils";
+import ProcedureMediaPopup from "./ProcedureMediaPopup";
+import { useNotify } from "@/lib/store/ui.store";
+import { downloadProcedureZip, downloadPatientsZip, downloadMultipleProceduresZip } from "@/lib/utils/download";
 
 interface PatientQueueProps {
     onViewHistory: (patient: any, procedureId: string) => void;
     onStartProcedure: (patient: any, procedureId?: string) => void;
     onStartAnnotate?: (patient: any, procedure: any) => void;
     onEditReport?: (patient: any, procedure: any) => void;
+    onPreviewReport?: (patient: any, procedure: any) => void; // Added missing prop
     onEndAndAnnotate?: (patient: any, procedure: any) => void;
     onImport: () => void;
     onEdit: (patient: any) => void;
     refreshKey?: number;
+    externalSearchQuery?: string;
+    onSearchChange?: (q: string) => void;
+    orgLogo?: string;
+    orgData?: any;
+    isCameraConnected?: boolean;
 }
 
-export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onEndAndAnnotate, onImport, onEdit, refreshKey }: PatientQueueProps) {
+
+// helper to count visits
+const getVisitCount = (procs: any[]) => {
+    if (!procs || procs.length === 0) return 0;
+    const uniqueDays = new Set(procs.map(p => new Date(p.createdAt).toLocaleDateString()));
+    return uniqueDays.size;
+};
+
+const SlideToStart = ({onComplete, disabled = false}: {onComplete: () => void; disabled?: boolean}) => {
+    const containerWidth = 110;
+    const handleSize = 28;
+    const x = useMotionValue(0);
+    const backgroundFill = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(16,185,129,0.05)", "rgba(16,185,129,0.7)"]);
+    const fillWidth = useTransform(x, [0, containerWidth - handleSize - 8], [handleSize, containerWidth]);
+    const textColor = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(16,185,129,0.4)", "rgba(255,255,255,1)"]);
+    const [done, setDone] = useState(false);
+    return (
+        <div className={cn("relative h-8 rounded-full overflow-hidden p-1 shadow-[inset_0_1px_3px_rgba(0,0,0,0.05)] bg-slate-100/50 border border-slate-200/50", disabled ? "opacity-50 pointer-events-none" : "hover:bg-slate-100")} style={{ width: containerWidth }}>
+            <motion.div className="absolute inset-y-0 left-0" style={{ width: fillWidth, background: backgroundFill, borderRadius: 20 }} />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <motion.span className="text-[11px] font-black tracking-[0.1em] ml-2" style={{ color: textColor }}>Start</motion.span>
+            </div>
+            <motion.div drag="x" style={{x}} dragConstraints={{left:0,right:containerWidth-handleSize-8}} dragElastic={0} onDragEnd={(_,info)=>{
+                if (x.get() > containerWidth-handleSize-15) { 
+                    setDone(true); 
+                    onComplete(); 
+                    setTimeout(()=>{setDone(false); x.set(0);},1200);
+                } else { 
+                    animate(x,0,{type:'spring',stiffness:500,damping:30}); 
+                }
+            }} className={cn("relative z-30 h-full aspect-square bg-emerald-600 rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing shadow-md", done && "bg-emerald-500")} whileHover={{scale:1.05}} whileTap={{scale:0.95}}>
+                {done?<Check size={14} className="text-white" strokeWidth={3}/>:<ArrowRight size={14} className="text-white" strokeWidth={3}/>}
+            </motion.div>
+        </div>
+    );
+};
+
+export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onEndAndAnnotate, onImport, onEdit, refreshKey, externalSearchQuery, onSearchChange, orgLogo, orgData, isCameraConnected = false }: PatientQueueProps) {
     const [patients, setPatients] = useState<any[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [selectedProcIds, setSelectedProcIds] = useState<Set<string>>(new Set());
     const [searchQuery, setSearchQuery] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [isExporting, setIsExporting] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
+    const [usbConnected, setUsbConnected] = useState<boolean>(false);
+    const [expandedTab, setExpandedTab] = useState<'completed' | 'pending' | 'incomplete' | 'bins'>('completed');
+    const [patientCategory, setPatientCategory] = useState<'all' | 'guest' | 'imported'>('all');
+    const [downloadingProcs, setDownloadingProcs] = useState<Set<string>>(new Set());
+    
+    const notify = useNotify();
+
+    // Columns Visibility State
+    const [showColMenu, setShowColMenu] = useState(false);
+    const [cols, setCols] = useState({
+        mobile: true,
+        lastProcedure: true,
+        lastViewDate: true,
+        gallery: true,
+    });
 
     // Advanced Filters State
     const [genderFilter, setGenderFilter] = useState<string>("all");
     const [ageFilter, setAgeFilter] = useState<string>("all");
     const [refFilter, setRefFilter] = useState<string>("");
     const [visitFilter, setVisitFilter] = useState<string>("all");
+    const [fromDateFilter, setFromDateFilter] = useState<string>("");
+    const [toDateFilter, setToDateFilter] = useState<string>("");
+
+    // Media Popup State
+    const [mediaPopup, setMediaPopup] = useState<{
+        isOpen: boolean;
+        patient: any;
+        initialTab: 'images' | 'annotated' | 'videos' | 'reports';
+        initialProcedureId?: string;
+    }>({
+        isOpen: false,
+        patient: null,
+        initialTab: 'images'
+    });
 
     // Pagination State
     const [currentPage, setCurrentPage] = useState(1);
     const [showAll, setShowAll] = useState(false);
     const itemsPerPage = 8; // Adjust to fit nicely
 
-    // Countdown State for Start Procedure
-    const [startingPatientId, setStartingPatientId] = useState<string | null>(null);
-    const [countdown, setCountdown] = useState(3);
     const listRef = useRef<HTMLDivElement>(null);
 
-    useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
-            if (target && typeof target.closest === 'function') {
-                if (!target.closest('.patient-row-wrapper')) {
-                    setExpandedId(null);
-                }
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside, true);
-        return () => document.removeEventListener('mousedown', handleClickOutside, true);
-    }, []);
+    const checkUsbStatus = async () => {
+        try {
+            const status = await getSystemStatus();
+            setUsbConnected(status.usb);
+        } catch (err) {
+            console.error("Failed to check USB status:", err);
+            setUsbConnected(false);
+        }
+    };
 
     useEffect(() => {
         loadPatients();
+        checkUsbStatus();
+        const interval = setInterval(checkUsbStatus, 5000); // Check every 5s
+        return () => clearInterval(interval);
     }, [refreshKey]);
 
     const loadPatients = useCallback(async () => {
         setIsLoading(true);
         try {
             const result = await searchPatients('');
-            if (result) setPatients(result);
+            if (result && result.success) setPatients(result.patients || []);
         } catch (error) {
             console.error("Clinical boot error:", error);
         } finally {
@@ -87,22 +161,56 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
         }
     };
 
+    const toggleProcSelect = (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        const next = new Set(selectedProcIds);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        setSelectedProcIds(next);
+    };
+
+    const toggleAllProcs = (e: React.MouseEvent, procs: any[]) => {
+        e.stopPropagation();
+        const ids = procs.map(p => p.id);
+        const allSelected = ids.every(id => selectedProcIds.has(id));
+        const next = new Set(selectedProcIds);
+        if (allSelected) ids.forEach(id => next.delete(id));
+        else ids.forEach(id => next.add(id));
+        setSelectedProcIds(next);
+    };
+
     const handleExport = async () => {
         if (selectedIds.size === 0) return;
         setIsExporting(true);
         try {
-            const result = await exportPatientsAction(Array.from(selectedIds));
-            if (result.success) {
-                alert(`Export successful: ${result.fileName}`);
-                setSelectedIds(new Set());
-            } else {
-                alert(`Export failed: ${result.error}`);
-            }
+            // Find full patient objects from filtered list matching the selected IDs
+            const selectedPatients = patients.filter(p => selectedIds.has(p.id));
+            if (selectedPatients.length === 0) throw new Error("Could not construct target patients for export");
+
+            notify.success("Export Started", "Preparing files for bulk ZIP archive...");
+            
+            // Generate ZIP directly using utility
+            // orgData comes from DoctorPage injected props
+            await downloadPatientsZip(selectedPatients, orgData);
+            
+            notify.success("Export Successful", "Bulk ZIP archive generated successfully.");
+            setSelectedIds(new Set());
         } catch (err) {
-            alert("Export process failure");
+            console.error("Bulk export failed:", err);
+            notify.error("Export Failed", "There was an error generating the bulk ZIP archive.");
         } finally {
             setIsExporting(false);
         }
+    };
+
+    const openMediaPopup = (e: React.MouseEvent, patient: any, tab: 'images' | 'annotated' | 'videos' | 'reports', procedureId?: string) => {
+        e.stopPropagation();
+        setMediaPopup({
+            isOpen: true,
+            patient,
+            initialTab: tab,
+            initialProcedureId: procedureId || (patient.procedures?.[0]?.id)
+        });
     };
 
     const clearFilters = () => {
@@ -111,6 +219,8 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
         setRefFilter("");
         setVisitFilter("all");
         setSearchQuery("");
+        setFromDateFilter("");
+        setToDateFilter("");
     };
 
     const filteredPatients = patients.filter(p => {
@@ -150,17 +260,47 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
             else if (visitFilter === "2+") matchesVisits = counts >= 2;
         }
 
-        return matchesQuery && matchesGender && matchesAge && matchesRef && matchesVisits;
+        // Category Filter
+        let matchesCategory = true;
+        if (patientCategory === 'all') {
+            matchesCategory = p.refId !== 'GUEST';
+        } else if (patientCategory === 'guest') {
+            matchesCategory = p.refId === 'GUEST';
+        } else if (patientCategory === 'imported') {
+            matchesCategory = p.procedures?.some((proc: any) => 
+                proc.type === 'External Import' || proc.source === 'External Import'
+            );
+        }
+
+        // Date Range Filter
+        let matchesDate = true;
+        if (fromDateFilter || toDateFilter) {
+            if (!p.createdAt) {
+                matchesDate = false;
+            } else {
+                const regDate = new Date(p.createdAt).getTime();
+                if (fromDateFilter) {
+                    const from = new Date(fromDateFilter).setHours(0, 0, 0, 0);
+                    if (regDate < from) matchesDate = false;
+                }
+                if (toDateFilter) {
+                    const to = new Date(toDateFilter).setHours(23, 59, 59, 999);
+                    if (regDate > to) matchesDate = false;
+                }
+            }
+        }
+
+        return matchesQuery && matchesGender && matchesAge && matchesRef && matchesVisits && matchesCategory && matchesDate;
     });
 
-    const hasActiveFilters = genderFilter !== "all" || ageFilter !== "all" || refFilter !== "" || visitFilter !== "all" || searchQuery !== "";
+    const hasActiveFilters = genderFilter !== "all" || ageFilter !== "all" || refFilter !== "" || visitFilter !== "all" || searchQuery !== "" || fromDateFilter !== "" || toDateFilter !== "";
 
     const [expandedId, setExpandedId] = useState<string | null>(null);
 
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [searchQuery, genderFilter, ageFilter, refFilter, visitFilter]);
+    }, [searchQuery, genderFilter, ageFilter, refFilter, visitFilter, patientCategory, fromDateFilter, toDateFilter]);
 
     const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
     const paginatedPatients = showAll ? filteredPatients : filteredPatients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -171,6 +311,55 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const toggleExpand = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
         setExpandedId(prev => (prev === id ? null : id));
+    };
+
+    const handleDeleteProc = (e: React.MouseEvent, patientId: string, procId: string) => {
+        e.stopPropagation();
+        setPatients(prev => prev.map(patient => {
+            if (patient.id === patientId) {
+                return {
+                    ...patient,
+                    procedures: (patient.procedures || []).map((p: any) => 
+                        p.id === procId ? { ...p, deleted: true } : p
+                    )
+                };
+            }
+            return patient;
+        }));
+        notify.info("Moved to Bins", "Procedure moved to the bins tab.");
+    };
+
+    const handleRestoreProc = (e: React.MouseEvent, patientId: string, procId: string) => {
+        e.stopPropagation();
+        setPatients(prev => prev.map(patient => {
+            if (patient.id === patientId) {
+                return {
+                    ...patient,
+                    procedures: (patient.procedures || []).map((p: any) => 
+                        p.id === procId ? { ...p, deleted: false } : p
+                    )
+                };
+            }
+            return patient;
+        }));
+        notify.success("Restored", "Procedure has been restored effectively.");
+    };
+
+    const handlePermanentDeleteProc = (e: React.MouseEvent, patientId: string, procId: string) => {
+        e.stopPropagation();
+        // Using a custom confirm style if possible, but standard confirm is safer for now
+        if (window.confirm("Delete this procedure forever? This cannot be undone.")) {
+            setPatients(prev => prev.map(patient => {
+                if (patient.id === patientId) {
+                    return {
+                        ...patient,
+                        procedures: (patient.procedures || []).filter((p: any) => p.id !== procId)
+                    };
+                }
+                return patient;
+            }));
+            notify.error("Deleted Forever", "Procedure record permanently removed.");
+        }
     };
 
     // Helper to generate pagination numbers (e.g., 1, 2, 3, ..., 32)
@@ -191,49 +380,68 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     };
 
     // Handle Start Procedure Countdown
-    useEffect(() => {
-        let timer: NodeJS.Timeout;
-        if (startingPatientId) {
-            if (countdown > 0) {
-                timer = setTimeout(() => {
-                    setCountdown(c => c - 1);
-                }, 1000);
-            } else {
-                // Countdown finished
-                const patient = patients.find(p => p.id === startingPatientId);
-                if (patient) {
-                    onStartProcedure(patient);
-                }
-                setStartingPatientId(null);
-            }
-        }
-        return () => clearTimeout(timer);
-    }, [startingPatientId, countdown, patients, onStartProcedure]);
+    // Removed - using simple click handler instead
 
     const handleStartClick = (e: React.MouseEvent, patientId: string) => {
         e.stopPropagation();
-        if (startingPatientId === patientId) {
-            // Cancel
-            setStartingPatientId(null);
-        } else {
-            setStartingPatientId(patientId);
-            setCountdown(3);
+        const patient = patients.find(p => p.id === patientId);
+        if (patient) {
+            onStartProcedure(patient);
         }
     };
 
     return (
-        <div className="h-full flex flex-col bg-white overflow-hidden">
+        <div className="h-full flex flex-col bg-white overflow-hidden patient-queue-root">
             {/* Main Header */}
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
-                <div className="flex items-center gap-4 flex-1">
-                    <div className="relative flex-1 max-w-xl">
+                <div className="flex items-center gap-6 flex-1 min-w-0">
+                    {orgLogo && (
+                        <div className="flex items-center shrink-0">
+                            <img
+                                src={orgLogo.startsWith('data:') ? orgLogo : `/api/capture-serve?path=${encodeURIComponent(orgLogo)}`}
+                                alt="Organization Logo"
+                                className="h-9 w-auto max-w-[120px] object-contain"
+                            />
+                        </div>
+                    )}
+                    
+                    <div className="flex items-center bg-slate-100/80 p-1 rounded-xl shrink-0">
+                        {[
+                            { id: 'all', label: 'All Patients', icon: Users },
+                            { id: 'guest', label: 'Guest Patients', icon: User },
+                            { id: 'imported', label: 'Imported Patients', icon: UploadCloud }
+                        ].map((tab) => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setPatientCategory(tab.id as any)}
+                                className={cn(
+                                    "relative flex items-center gap-2 px-4 py-1.5 rounded-lg text-[11px] font-bold transition-all whitespace-nowrap",
+                                    patientCategory === tab.id 
+                                        ? "bg-white text-blue-600 shadow-sm text-blue-700" 
+                                        : "text-slate-500 hover:text-slate-700 hover:bg-white/40"
+                                )}
+                            >
+                                <tab.icon size={13} strokeWidth={2.5} />
+                                {tab.label}
+                                {patientCategory === tab.id && (
+                                    <motion.div 
+                                        layoutId="activeTab"
+                                        className="absolute inset-0 bg-white rounded-lg -z-10 shadow-sm"
+                                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                    />
+                                )}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="relative flex-1 max-w-lg min-w-[200px]">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                         <input
                             type="text"
-                            placeholder="Search patients by MRN, name, or phone number.."
+                            placeholder="Search patients by MRN, Name, or Phone number.."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full h-11 pl-11 pr-4 bg-slate-50 border-none rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
+                            className="w-full h-10 pl-11 pr-4 bg-slate-50 border border-slate-200/50 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/10 focus:bg-white transition-all outline-none"
                         />
                     </div>
                 </div>
@@ -281,12 +489,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                         <div className="px-6 py-3 flex items-center justify-between gap-4">
                             <div className="flex items-center gap-6">
                                 {/* Gender */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Gender</span>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">Gender</span>
                                     <select
                                         value={genderFilter}
                                         onChange={(e) => setGenderFilter(e.target.value)}
-                                        className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[100px]"
+                                        className="h-8 px-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[90px]"
                                     >
                                         <option value="all">All Genders</option>
                                         <option value="Male">Male</option>
@@ -295,12 +503,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                 </div>
 
                                 {/* Age Range */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Age</span>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">Age</span>
                                     <select
                                         value={ageFilter}
                                         onChange={(e) => setAgeFilter(e.target.value)}
-                                        className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[110px]"
+                                        className="h-8 px-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[90px]"
                                     >
                                         <option value="all">All Ages</option>
                                         <option value="0-18">0-18 Yrs</option>
@@ -311,12 +519,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                 </div>
 
                                 {/* Visit Count */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Visits</span>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">Visits</span>
                                     <select
                                         value={visitFilter}
                                         onChange={(e) => setVisitFilter(e.target.value)}
-                                        className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[100px]"
+                                        className="h-8 px-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none min-w-[90px]"
                                     >
                                         <option value="all">All Visits</option>
                                         <option value="0">0 Visits</option>
@@ -326,24 +534,52 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                 </div>
 
                                 {/* Referring Doctor Search */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Ref Dr</span>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">Ref Dr</span>
                                     <div className="relative">
                                         <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                                         <input
                                             type="text"
-                                            placeholder="Search by Doctor..."
+                                            placeholder="Search Doctor..."
                                             value={refFilter}
                                             onChange={(e) => setRefFilter(e.target.value)}
-                                            className="w-48 h-9 pl-9 pr-3 bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
+                                            className="w-40 h-8 pl-9 pr-3 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
                                         />
+                                    </div>
+                                </div>
+
+                                {/* Date Range Filter */}
+                                <div className="flex items-center gap-4 ml-2 border-l border-slate-200 pl-4">
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">From Date</span>
+                                        <div className="relative">
+                                            <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+                                            <input
+                                                type="date"
+                                                value={fromDateFilter}
+                                                onChange={(e) => setFromDateFilter(e.target.value)}
+                                                className="h-8 pl-8 pr-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.15em] ml-1">To Date</span>
+                                        <div className="relative">
+                                            <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+                                            <input
+                                                type="date"
+                                                value={toDateFilter}
+                                                onChange={(e) => setToDateFilter(e.target.value)}
+                                                className="h-8 pl-8 pr-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
                             <button
                                 onClick={clearFilters}
-                                className="px-4 py-2 text-[10px] font-black text-slate-400 hover:text-blue-600 transition-colors uppercase tracking-[0.2em]"
+                                className="px-4 py-2 text-[10px] font-black text-slate-400 hover:text-blue-600 transition-colors tracking-[0.2em]"
                             >
                                 Clear Filters
                             </button>
@@ -352,290 +588,664 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                 )}
             </AnimatePresence>
 
-            {/* Table Headers */}
-            <div className="px-6 py-2.5 border-b border-slate-100 bg-slate-50/10 flex items-center text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">
-                <div className="w-10 flex justify-center">
-                    <button onClick={toggleSelectAll} className="w-4 h-4 border border-slate-200 rounded flex items-center justify-center transition-all bg-white">
-                        {selectedIds.size === filteredPatients.length && filteredPatients.length > 0 && <CheckSquare size={11} className="text-blue-500" />}
-                    </button>
-                </div>
-                <div className="w-36 pl-4">History / MRN</div>
-                <div className="flex-1 px-4">Patient Details</div>
-                <div className="w-48 px-4">Referral Info</div>
-                <div className="w-32 px-4">Contact</div>
-                <div className="w-28 text-right pr-6">Action</div>
-                <div className="w-10"></div>
-            </div>
+            {/* Table & Pagination Wrapper */}
+            <div className="bg-white rounded-[24px] border border-slate-200/70 !border-t-transparent shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex flex-col flex-1 overflow-hidden mx-6 mb-6">
+                <div className="flex-1 overflow-auto no-scrollbar relative w-full custom-scrollbar">
+                    <table className="w-full text-left border-collapse table-fixed">
+                        <thead>
+                            <tr className="bg-slate-50/80">
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[40px] px-3 py-3 border-b border-slate-200/80">
+                                    <button onClick={toggleSelectAll} className="w-4 h-4 border border-slate-300 rounded flex items-center justify-center transition-all bg-white">
+                                        {selectedIds.size === filteredPatients.length && filteredPatients.length > 0 && <CheckSquare size={11} className="text-blue-500" />}
+                                    </button>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[140px] px-3 py-4 border-b border-slate-200/80">
+                                    <span className="text-[13px] font-bold text-slate-500">MRN no / 1st visit</span>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[200px] px-3 py-4 border-b border-slate-200/80">
+                                    <span className="text-[13px] font-bold text-slate-500">Patient name / ABHA ID</span>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[100px] px-3 py-4 border-b border-slate-200/80 text-center">
+                                    <span className="text-[13px] font-bold text-slate-500">Age / Gender</span>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[130px] px-3 py-4 border-b border-slate-200/80">
+                                    <span className="text-[13px] font-bold text-slate-500">Mobile</span>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[240px] px-4 py-4 border-b border-slate-200/80">
+                                    <span className="text-[13px] font-bold text-slate-500 tracking-tight whitespace-nowrap">Last procedure & gallery</span>
+                                </th>
+                                <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[140px] px-4 py-4 border-b border-slate-200/80 text-left">
+                                    <span className="text-[13px] font-bold text-slate-500">Action</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100/80">
+                    <AnimatePresence mode="popLayout">
+                        {isLoading ? (
+                            <motion.tr layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                                <td colSpan={7}>
+                                    <div className="flex flex-col items-center justify-center py-20">
+                                        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" strokeWidth={2} />
+                                        <p className="mt-4 text-[11px] font-bold text-slate-400 tracking-widest">Loading records...</p>
+                                    </div>
+                                </td>
+                            </motion.tr>
+                        ) : paginatedPatients.length === 0 ? (
+                            <motion.tr layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                                <td colSpan={7}>
+                                    <div className="py-20 text-center">
+                                        <p className="text-slate-400 font-bold text-sm tracking-widest italic">No clinical records found</p>
+                                    </div>
+                                </td>
+                            </motion.tr>
+                        ) : (
+                                    paginatedPatients.map((patient, idx) => {
+                                        const isSelected = selectedIds.has(patient.id);
+                                        const isExpanded = expandedId === patient.id;
+                                        
+                                        // Filter out ghost procedures (must have media or be completed/have report)
+                                        const validProcs = (patient.procedures || []).filter((p: any) => 
+                                            !p.deleted && (p.status === 'COMPLETED' || p.report || (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0))
+                                        );
+                                        const lastProc = validProcs[0];
 
-            {/* Scrollable List */}
-            <div ref={listRef} className="flex-1 overflow-y-auto overflow-x-hidden">
-                <AnimatePresence mode="popLayout">
-                    {isLoading ? (
-                        <div className="flex flex-col items-center justify-center py-20">
-                            <Loader2 className="w-8 h-8 text-blue-500 animate-spin" strokeWidth={2} />
-                            <p className="mt-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Loading Records...</p>
-                        </div>
-                    ) : paginatedPatients.length === 0 ? (
-                        <div className="py-20 text-center">
-                            <p className="text-slate-400 font-bold text-sm uppercase tracking-widest italic">No clinical records found</p>
-                        </div>
-                    ) : (
-                        paginatedPatients.map((patient, idx) => {
-                            const isSelected = selectedIds.has(patient.id);
-                            const isExpanded = expandedId === patient.id;
-                            const initials = (patient.fullName || 'P').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+                                        return (
+                                            <React.Fragment key={patient.id}>
+                                                <motion.tr
+                                                    initial={{ opacity: 0 }}
+                                                    animate={{ opacity: 1 }}
+                                                    transition={{ delay: idx * 0.01 }}
+                                                    className={cn(
+                                                        "group transition-colors relative cursor-pointer border-b border-slate-200/60 patient-row-wrapper",
+                                                        isSelected ? "bg-blue-50/80" : isExpanded ? "bg-white shadow-[0_12px_30px_rgba(0,0,0,0.08)] z-[50] sticky top-[57px]" : "bg-white hover:bg-slate-50/40"
+                                                    )}
+                                                    onClick={(e) => toggleExpand(e, patient.id)}
+                                                >
+                                                    <td className="px-3 py-2.5 bg-inherit rounded-l-none">
+                                                        <button
+                                                            onClick={(e) => toggleSelect(e, patient.id)}
+                                                            className={cn(
+                                                                "w-4 h-4 border rounded flex items-center justify-center transition-all",
+                                                                isSelected ? "bg-blue-500 border-blue-500 text-white" : "border-slate-300 bg-white"
+                                                            )}
+                                                        >
+                                                            {isSelected && <CheckSquare size={10} />}
+                                                        </button>
+                                                    </td>
 
-                            return (
-                                <div key={patient.id} className="border-b border-slate-50 group transition-colors relative patient-row-wrapper">
-                                    <motion.div
-                                        layout
-                                        initial={{ opacity: 0, y: 5 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: idx * 0.02 }}
-                                        className={cn(
-                                            "px-6 h-14 flex items-center text-sm text-slate-600 cursor-pointer transition-all hover:bg-slate-100/50",
-                                            isSelected ? "bg-blue-50/40" : (idx % 2 === 0 ? "bg-slate-50/20" : "bg-white")
-                                        )}
-                                        onClick={(e) => toggleExpand(e, patient.id)}
-                                    >
-                                        <div className="w-10 flex justify-center" onClick={(e) => e.stopPropagation()}>
-                                            <button
-                                                onClick={(e) => toggleSelect(e, patient.id)}
-                                                className={cn(
-                                                    "w-4 h-4 border rounded flex items-center justify-center transition-all",
-                                                    isSelected ? "bg-blue-500 border-blue-500 text-white" : "border-slate-200 bg-white"
-                                                )}
-                                            >
-                                                {isSelected && <CheckSquare size={11} />}
-                                            </button>
-                                        </div>
+                                                    {/* Stacked MRN / 1st Visit */}
+                                                    <td className="px-3 py-4">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[15px] font-bold text-slate-800 tracking-tight">{patient.mrn}</span>
+                                                            <span className="text-[12px] text-slate-600 font-semibold leading-tight mt-0.5">
+                                                                {patient.createdAt ? new Date(patient.createdAt).toLocaleDateString('en-GB') : 'No record'}
+                                                            </span>
+                                                        </div>
+                                                    </td>
 
-                                        <div className="w-36 pl-4 flex flex-col justify-center">
-                                            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider">
-                                                #{patient.mrn}
-                                            </span>
-                                            <div className="flex items-center gap-1.5 mt-0.5">
-                                                <span className="text-[11px] font-bold text-blue-600">
-                                                    {patient.procedures?.length > 0
-                                                        ? new Date(patient.procedures[0].createdAt).toLocaleDateString('en-GB')
-                                                        : 'No History'}
-                                                </span>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex-1 px-4 flex items-center gap-3 overflow-hidden">
-                                            <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-100/50 flex items-center justify-center overflow-hidden text-[10px] font-black text-blue-600 shrink-0 capitalize">
-                                                {initials}
-                                            </div>
-                                            <div className="flex flex-col min-w-0">
-                                                <span className="font-bold text-slate-800 truncate text-[13px] leading-tight">{patient.fullName}</span>
-                                                <div className="flex items-center gap-1.5 mt-0.5">
-                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">{patient.gender || '??'}</span>
-                                                    <span className="w-1 h-1 rounded-full bg-slate-200" />
-                                                    <span className="text-[10px] font-bold text-slate-500">{patient.age || '??'} Yrs</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="w-48 px-4 flex flex-col justify-center overflow-hidden">
-                                            <span className="text-[11px] text-slate-700 font-bold uppercase tracking-tight truncate">
-                                                {patient.referringDoctor || 'Self'}
-                                            </span>
-                                            <span className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
-                                                ID: {patient.refId || '---'}
-                                            </span>
-                                        </div>
-
-                                        <div className="w-32 px-4 flex items-center">
-                                            <span className="font-bold text-slate-600 text-[11px] tracking-tight">{patient.mobile || '---'}</span>
-                                        </div>
-
-                                        <div className="w-28 py-2 flex justify-end pr-4" onClick={(e) => e.stopPropagation()}>
-                                            <button
-                                                onClick={(e) => handleStartClick(e, patient.id)}
-                                                className={cn(
-                                                    "px-3 h-8 text-white rounded-lg flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-all shadow-sm active:scale-[0.95]",
-                                                    startingPatientId === patient.id
-                                                        ? "bg-red-500 hover:bg-red-600 shadow-red-500/20"
-                                                        : "bg-slate-900 hover:bg-blue-600 shadow-slate-900/10"
-                                                )}
-                                                style={{
-                                                    background: startingPatientId === patient.id
-                                                        ? `linear-gradient(to right, #ef4444 ${((3 - countdown) / 3) * 100}%, #f87171 ${((3 - countdown) / 3) * 100}%)`
-                                                        : undefined
-                                                }}
-                                            >
-                                                {startingPatientId === patient.id ? (
-                                                    <span className="whitespace-nowrap px-1 overflow-hidden font-black">CANCEL ({countdown}s)</span>
-                                                ) : (
-                                                    <>
-                                                        <Play size={10} fill="currentColor" />
-                                                        Start
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-
-                                        <div className="w-10 flex justify-end pr-4">
-                                            <button
-                                                onClick={(e) => toggleExpand(e, patient.id)}
-                                                className={cn(
-                                                    "p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all rounded-lg",
-                                                    isExpanded && "text-blue-600 bg-blue-50 rotate-180"
-                                                )}
-                                            >
-                                                <ChevronDown size={14} className="transition-transform duration-200" />
-                                            </button>
-                                        </div>
-
-                                    </motion.div>
-
-                                    {/* Expanded View: Inner Tabular View */}
-                                    <AnimatePresence>
-                                        {isExpanded && (
-                                            <motion.div
-                                                initial={{ height: 0, opacity: 0 }}
-                                                animate={{ height: "auto", opacity: 1 }}
-                                                exit={{ height: 0, opacity: 0 }}
-                                                className="bg-slate-50/80 overflow-hidden"
-                                            >
-                                                <div className="ml-auto mr-14 mb-4 max-w-2xl border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden">
-                                                    <div className="max-h-[145px] overflow-y-auto custom-scrollbar">
-                                                        <table className="w-full text-xs relative">
-                                                            <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-sm">
-                                                                <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-widest text-[9px]">
-                                                                    <th className="px-4 py-2.5 text-left">Created</th>
-                                                                    <th className="px-4 py-2.5 text-left">Last Updated</th>
-                                                                    <th className="px-4 py-2.5 text-left w-40">Status</th>
-                                                                    <th className="px-4 py-2.5 text-right">Action</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody className="divide-y divide-slate-50">
-                                                                {patient.procedures && patient.procedures.length > 0 ? (
-                                                                    patient.procedures.map((proc: any) => {
-                                                                        // Determine unified status/action button
-                                                                        let statusLabel = proc.status;
-                                                                        let statusColor = "bg-slate-50 text-slate-500 border-slate-200";
-                                                                        let statusIcon = <Square size={10} />;
-                                                                        let actionHandler = undefined;
-
-                                                                        if (proc.status === 'COMPLETED') {
-                                                                            if (proc.report && proc.report.finalized === false) {
-                                                                                statusLabel = "DRAFT REPORT";
-                                                                                statusColor = "bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200 shadow-sm";
-                                                                                statusIcon = <Edit2 size={10} />;
-                                                                                actionHandler = () => {
-                                                                                    if (onEditReport) {
-                                                                                        onEditReport(patient, proc);
-                                                                                    } else if (onStartAnnotate) {
-                                                                                        onStartAnnotate(patient, proc);
-                                                                                    } else {
-                                                                                        onStartProcedure(patient, proc.id);
-                                                                                    }
-                                                                                };
-                                                                            } else {
-                                                                                statusColor = "bg-emerald-50 text-emerald-600 border-emerald-200/50";
-                                                                                statusIcon = <CheckSquare size={10} />;
-                                                                            }
-                                                                        } else if (proc.status === 'CAPTURED') {
-                                                                            statusLabel = "START ANNOTATE";
-                                                                            statusColor = "bg-blue-600 text-white border-blue-600 hover:bg-blue-700 shadow-sm shadow-blue-500/20";
-                                                                            statusIcon = <Edit2 size={10} />;
-                                                                            actionHandler = () => {
-                                                                                if (onStartAnnotate) {
-                                                                                    onStartAnnotate(patient, proc);
-                                                                                } else {
-                                                                                    onStartProcedure(patient, proc.id);
-                                                                                }
-                                                                            };
-                                                                        } else if (proc.status === 'CRITICAL') {
-                                                                            statusColor = "bg-rose-50 text-rose-600 border-rose-200/50";
-                                                                            statusIcon = <AlertCircle size={10} />;
-                                                                        } else if (proc.status === 'IN_PROGRESS') {
-                                                                            statusLabel = "RESUME";
-                                                                            statusColor = "bg-amber-500 text-white border-amber-500 hover:bg-amber-600 shadow-sm shadow-amber-500/20";
-                                                                            statusIcon = <Edit2 size={10} />;
-                                                                            actionHandler = () => onStartProcedure(patient, proc.id);
-                                                                        } else if (proc.status === 'SCHEDULED') {
-                                                                            statusLabel = "START";
-                                                                            statusColor = "bg-slate-800 text-white border-slate-800 hover:bg-slate-900 shadow-sm";
-                                                                            statusIcon = <Edit2 size={10} />;
-                                                                            actionHandler = () => onStartProcedure(patient, proc.id);
-                                                                        }
-
-                                                                        return (
-                                                                            <tr key={proc.id} className="group/row hover:bg-slate-50/50 transition-colors">
-                                                                                <td className="px-4 py-3">
-                                                                                    <div className="font-bold text-slate-600 text-[11px]">{new Date(proc.createdAt).toLocaleDateString('en-GB')}</div>
-                                                                                    <div className="text-[9px] text-slate-400 font-medium mt-0.5">{new Date(proc.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
-                                                                                </td>
-                                                                                <td className="px-4 py-3">
-                                                                                    <div className="font-bold text-slate-600 text-[11px]">{new Date(proc.updatedAt || proc.createdAt).toLocaleDateString('en-GB')}</div>
-                                                                                    <div className="text-[9px] text-slate-400 font-medium mt-0.5">{new Date(proc.updatedAt || proc.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
-                                                                                </td>
-                                                                                <td className="px-4 py-3">
-                                                                                    <div className="flex flex-col gap-1.5 w-full max-w-[140px]">
-                                                                                        <button
-                                                                                            onClick={actionHandler}
-                                                                                            disabled={!actionHandler}
-                                                                                            className={cn(
-                                                                                                "px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all border w-full",
-                                                                                                statusColor,
-                                                                                                !actionHandler && "cursor-default"
-                                                                                            )}
-                                                                                        >
-                                                                                            {statusIcon}
-                                                                                            {statusLabel}
-                                                                                        </button>
-
-                                                                                        {proc.status === 'IN_PROGRESS' && (
-                                                                                            <button
-                                                                                                onClick={(e) => {
-                                                                                                    e.stopPropagation();
-                                                                                                    if (onEndAndAnnotate) onEndAndAnnotate(patient, proc);
-                                                                                                }}
-                                                                                                className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-tight flex items-center justify-center gap-1 transition-all border border-blue-200 bg-white text-blue-600 hover:bg-blue-50 shadow-sm"
-                                                                                            >
-                                                                                                <ArrowRight size={8} />
-                                                                                                End & Annotate
-                                                                                            </button>
-                                                                                        )}
-                                                                                    </div>
-                                                                                </td>
-                                                                                <td className="px-4 py-3 text-right">
-                                                                                    <div className="flex items-center justify-end">
-                                                                                        <button
-                                                                                            onClick={(e) => {
-                                                                                                e.stopPropagation();
-                                                                                                onViewHistory(patient, proc.id);
-                                                                                            }}
-                                                                                            className="px-3 py-1.5 text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-lg transition-all hover:bg-slate-50 hover:shadow-sm active:scale-95 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider shadow-sm"
-                                                                                        >
-                                                                                            View History
-                                                                                        </button>
-                                                                                    </div>
-                                                                                </td>
-                                                                            </tr>
-                                                                        );
-                                                                    })
-                                                                ) : (
-                                                                    <tr>
-                                                                        <td colSpan={4} className="px-6 py-4 text-center text-slate-400 italic font-medium text-xs">No procedures recorded</td>
-                                                                    </tr>
+                                                    {/* Stacked Patient Name / ABHA ID */}
+                                                    <td className="px-4 py-5 group/name relative">
+                                                        <div className="flex items-center gap-3 max-w-full overflow-hidden">
+                                                            <div className="flex flex-col flex-1 overflow-hidden">
+                                                                <span className="text-[16px] font-bold text-slate-900 truncate capitalize leading-tight">{patient.fullName?.toLowerCase() || 'Unnamed'}</span>
+                                                                {patient.refId && patient.refId !== 'NILL' && patient.refId !== 'No Abha id' && (
+                                                                    <span className="text-[12px] text-slate-500 font-semibold truncate leading-tight mt-1.5 flex items-center gap-1.5">
+                                                                        <span className="inline-block w-1 h-1 rounded-full bg-slate-300"></span>
+                                                                        {patient.refId}
+                                                                    </span>
                                                                 )}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
-                                                </div>
-                                            </motion.div>
-                                        )}
-                                    </AnimatePresence>
-                                </div>
-                            );
-                        })
-                    )}
-                </AnimatePresence>
-            </div>
+                                                            </div>
+                                                            <button 
+                                                                onClick={(e) => { e.stopPropagation(); onEdit(patient); }}
+                                                                className="opacity-0 group-hover/name:opacity-100 transition-all duration-300 p-2.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl shadow-sm border border-blue-100/50 flex items-center justify-center"
+                                                            >
+                                                                <Edit2 size={14} strokeWidth={2.5} />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+
+                                                    {/* Merged Age / Gender */}
+                                                    <td className="px-3 py-4 border-l border-slate-50/50">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <span className="text-[15px] font-bold text-slate-700">{patient.refId === 'GUEST' ? '--' : (patient.age || '--')}</span>
+                                                            <span className="text-slate-300 font-light translate-y-[-1px]">/</span>
+                                                            <span className={cn(
+                                                                "inline-flex items-center justify-center min-w-[22px] h-6 px-1.5 rounded-md text-[11px] font-black tracking-wider uppercase shadow-sm",
+                                                                patient.gender?.toLowerCase() === 'male' 
+                                                                    ? "bg-blue-50 text-blue-600 border border-blue-100" 
+                                                                    : "bg-pink-50 text-pink-600 border border-pink-100"
+                                                            )}>
+                                                                {patient.refId === 'GUEST' ? '?' : (patient.gender?.charAt(0) || '?')}
+                                                            </span>
+                                                        </div>
+                                                    </td>
+
+                                                    <td className="px-3 py-4 text-[15px] font-semibold text-slate-700 border-l border-slate-50/50">
+                                                        {patient.refId === 'GUEST' ? '--' : (patient.mobile || '--')}
+                                                    </td>
+
+                                                     <td className="px-3 py-4 border-l border-slate-50/50">
+                                                        <div className="flex flex-col gap-1.5">
+                                                            <span className="text-[15px] font-bold text-slate-900 truncate leading-tight tracking-tight capitalize">
+                                                                {lastProc ? lastProc.type : 'None'}
+                                                            </span>
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="text-[12px] text-slate-500 font-semibold whitespace-nowrap">
+                                                                    {lastProc ? new Date(lastProc.createdAt).toLocaleDateString('en-GB') : ''}
+                                                                </span>
+                                                                 <div className="flex items-center gap-3">
+                                                                    <button 
+                                                                        onClick={(e) => openMediaPopup(e, patient, 'images', lastProc?.id)}
+                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
+                                                                    >
+                                                                        <ImageIcon size={13} strokeWidth={2.5} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
+                                                                        <span className="text-[12px] font-bold tabular-nums">
+                                                                            {lastProc?.mediaStats?.images || 0}
+                                                                        </span>
+                                                                    </button>
+                                                                    <button 
+                                                                        onClick={(e) => openMediaPopup(e, patient, 'videos', lastProc?.id)}
+                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
+                                                                    >
+                                                                        <Play size={11} fill="currentColor" strokeWidth={0} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
+                                                                        <span className="text-[12px] font-bold tabular-nums">
+                                                                            {lastProc?.mediaStats?.videos || 0}
+                                                                        </span>
+                                                                    </button>
+                                                                    <button 
+                                                                        onClick={(e) => openMediaPopup(e, patient, 'reports', lastProc?.id)}
+                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
+                                                                    >
+                                                                        <FileText size={13} strokeWidth={2.5} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
+                                                                        <span className="text-[12px] font-bold tabular-nums">
+                                                                            {lastProc?.mediaStats?.reports || 0}
+                                                                        </span>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+
+                                                    <td className="px-3 py-4">
+                                                        <div className="flex items-center justify-start">
+                                                            {patient.refId === 'GUEST' ? (
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); onEdit(patient); }}
+                                                                    className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-full text-[11px] font-black tracking-[0.1em] uppercase shadow-md hover:bg-blue-700 transition-all hover:scale-105"
+                                                                >
+                                                                    <Plus size={13} strokeWidth={3} />
+                                                                    Add Patient
+                                                                </button>
+                                                            ) : (
+                                                                <SlideToStart onComplete={() => onStartProcedure(patient)} disabled={isLoading || !isCameraConnected} />
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </motion.tr>
+
+                                                <AnimatePresence>
+                                                    {isExpanded && (
+                                                        <motion.tr
+                                                            initial={{ opacity: 0, height: 0 }}
+                                                            animate={{ opacity: 1, height: 'auto' }}
+                                                            exit={{ opacity: 0, height: 0 }}
+                                                            className="bg-white patient-row-wrapper relative z-[45] sticky top-[112px] border-b border-slate-200/60 shadow-[0_20px_40px_rgba(0,0,0,0.06)]"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            <td colSpan={7} className="p-0 border-none">
+                                                                <div className="px-6 py-6" onClick={(e) => e.stopPropagation()}>
+                                                                    <div className="bg-white rounded-[24px] border border-slate-200/60 shadow-sm overflow-hidden max-h-[500px] overflow-y-auto custom-scrollbar">
+                                                                        {/* Fluid Tabs */}
+                                                                        <div className="flex items-center justify-between px-8 border-b border-slate-100 bg-slate-50/30">
+                                                                            <div className="flex items-center gap-8">
+                                                                                 {[
+                                                                                     { id: 'completed', label: 'Completed', count: patient.procedures?.filter((p: any) => !p.deleted && p.report?.finalized).length || 0 },
+                                                                                     { id: 'pending', label: 'Pending', count: patient.procedures?.filter((p: any) => !p.deleted && (p.status === 'COMPLETED' || p.report) && !p.report?.finalized).length || 0 },
+                                                                                     { id: 'incomplete', label: 'Incomplete', count: patient.procedures?.filter((p: any) => !p.deleted && p.status !== 'COMPLETED' && !p.report && (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0)).length || 0 },
+                                                                                     { id: 'bins', label: 'Bin', count: patient.procedures?.filter((p: any) => p.deleted).length || 0 }
+                                                                                 ].map((tab) => (
+                                                                                    <button
+                                                                                        key={tab.id}
+                                                                                        onClick={(e) => { e.stopPropagation(); setExpandedTab(tab.id as any); }}
+                                                                                        className={cn(
+                                                                                            "py-4 text-[12px] font-black uppercase tracking-[0.2em] relative transition-all",
+                                                                                            expandedTab === tab.id ? "text-blue-600" : "text-slate-400 hover:text-slate-600"
+                                                                                        )}
+                                                                                    >
+                                                                                        <div className="flex items-center gap-2">
+                                                                                            {tab.label}
+                                                                                            <span className={cn(
+                                                                                                "px-1.5 py-0.5 rounded text-[10px] tabular-nums",
+                                                                                                expandedTab === tab.id ? "bg-blue-600 text-white" : "bg-slate-200 text-slate-500"
+                                                                                            )}>
+                                                                                                {tab.count || 0}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        {expandedTab === tab.id && (
+                                                                                            <motion.div layoutId="expandedActiveTab" className="absolute bottom-0 inset-x-0 h-0.5 bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.4)]" />
+                                                                                        )}
+                                                                                    </button>
+                                                                                ))}
+                                                                            </div>
+
+                                                                            <div className="flex items-center gap-3">
+                                                                                {/* Bulk Download Button — appears when procedures are selected */}
+                                                                                {selectedProcIds.size > 0 && (
+                                                                                    <button 
+                                                                                        onClick={async (e) => {
+                                                                                            e.stopPropagation();
+                                                                                            if (downloadingProcs.size > 0) return;
+                                                                                            
+                                                                                            // Mark all selected as downloading
+                                                                                            setDownloadingProcs(prev => {
+                                                                                                const next = new Set(prev);
+                                                                                                selectedProcIds.forEach(id => next.add(id));
+                                                                                                return next;
+                                                                                            });
+                                                                                            
+                                                                                            try {
+                                                                                                notify.success("Bulk Download Started", `Preparing ${selectedProcIds.size} procedures for ZIP archive...`);
+                                                                                                const selectedProcs = patient.procedures?.filter((p: any) => selectedProcIds.has(p.id)) || [];
+                                                                                                await downloadMultipleProceduresZip(patient, selectedProcs, orgData);
+                                                                                                notify.success("Download Complete", "Bulk ZIP archive generated successfully.");
+                                                                                                setSelectedProcIds(new Set());
+                                                                                            } catch (err) {
+                                                                                                console.error("Bulk download failed:", err);
+                                                                                                notify.error("Download Failed", "There was an error generating the bulk ZIP archive.");
+                                                                                            } finally {
+                                                                                                setDownloadingProcs(prev => {
+                                                                                                    const next = new Set(prev);
+                                                                                                    selectedProcIds.forEach(id => next.delete(id));
+                                                                                                    return next;
+                                                                                                });
+                                                                                            }
+                                                                                        }}
+                                                                                        disabled={downloadingProcs.size > 0}
+                                                                                        className={cn(
+                                                                                            "flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm border",
+                                                                                            downloadingProcs.size > 0
+                                                                                                ? "bg-slate-100 text-slate-400 border-slate-200 cursor-wait"
+                                                                                                : "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600 shadow-emerald-200/50"
+                                                                                        )}
+                                                                                        title={`Download ${selectedProcIds.size} selected procedures as ZIP`}
+                                                                                    >
+                                                                                        {downloadingProcs.size > 0 ? (
+                                                                                            <Loader2 size={13} className="animate-spin" />
+                                                                                        ) : (
+                                                                                            <Download size={13} />
+                                                                                        )}
+                                                                                        Download ({selectedProcIds.size})
+                                                                                    </button>
+                                                                                )}
+
+                                                                                <button 
+                                                                                    onClick={(e) => { e.stopPropagation(); setExpandedId(null); }}
+                                                                                    className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50/80 rounded-lg transition-all group/close flex items-center gap-2 pr-3"
+                                                                                    title="Close expanded view"
+                                                                                >
+                                                                                    <div className="w-8 h-8 rounded-full bg-slate-100 group-hover/close:bg-blue-100 flex items-center justify-center transition-colors">
+                                                                                        <ChevronUp size={18} className="group-hover/close:-translate-y-0.5 transition-transform" />
+                                                                                    </div>
+                                                                                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-0 group-hover/close:opacity-100 transition-opacity">Close</span>
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+
+                                                                        <table className="w-full text-left border-collapse table-fixed">
+                                                                            <thead className="bg-slate-50/30 border-b border-slate-100">
+                                                                                <tr>
+                                                                                    <th className="w-[50px] px-6 py-4 sticky top-0 bg-slate-50 z-20">
+                                                                                         <button 
+                                                                                             onClick={(e) => {
+                                                                                                 const currentFilteredProcs = patient.procedures?.filter((p: any) => {
+                                                                                                     if (expandedTab === 'bins') return p.deleted;
+                                                                                                     if (expandedTab === 'completed') return !p.deleted && p.report?.finalized;
+                                                                                                     if (expandedTab === 'pending') return !p.deleted && (p.status === 'COMPLETED' || p.report) && !p.report?.finalized;
+                                                                                                     if (expandedTab === 'incomplete') return !p.deleted && p.status !== 'COMPLETED' && !p.report && (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0);
+                                                                                                     return false;
+                                                                                                 }) || [];
+                                                                                                 toggleAllProcs(e, currentFilteredProcs);
+                                                                                             }} 
+                                                                                             className={cn(
+                                                                                                 "w-4 h-4 border rounded flex items-center justify-center transition-all",
+                                                                                                 (() => {
+                                                                                                     const currentFilteredProcs = patient.procedures?.filter((p: any) => {
+                                                                                                         if (expandedTab === 'bins') return p.deleted;
+                                                                                                         if (expandedTab === 'completed') return !p.deleted && p.report?.finalized;
+                                                                                                         if (expandedTab === 'pending') return !p.deleted && (p.status === 'COMPLETED' || p.report) && !p.report?.finalized;
+                                                                                                         if (expandedTab === 'incomplete') return !p.deleted && p.status !== 'COMPLETED' && !p.report && (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0);
+                                                                                                         return false;
+                                                                                                     }) || [];
+                                                                                                     const allSelected = currentFilteredProcs.length > 0 && currentFilteredProcs.every((p: any) => selectedProcIds.has(p.id));
+                                                                                                     return allSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white hover:border-blue-400";
+                                                                                                 })()
+                                                                                             )}
+                                                                                         >
+                                                                                             {(() => {
+                                                                                                 const currentFilteredProcs = patient.procedures?.filter((p: any) => {
+                                                                                                     if (expandedTab === 'bins') return p.deleted;
+                                                                                                     if (expandedTab === 'completed') return !p.deleted && p.report?.finalized;
+                                                                                                     if (expandedTab === 'pending') return !p.deleted && (p.status === 'COMPLETED' || p.report) && !p.report?.finalized;
+                                                                                                     if (expandedTab === 'incomplete') return !p.deleted && p.status !== 'COMPLETED' && !p.report && (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0);
+                                                                                                     return false;
+                                                                                                 }) || [];
+                                                                                                 const allSelected = currentFilteredProcs.length > 0 && currentFilteredProcs.every((p: any) => selectedProcIds.has(p.id));
+                                                                                                 return allSelected && <CheckSquare size={10} />;
+                                                                                             })()}
+                                                                                         </button>
+                                                                                    </th>
+                                                                                    <th className="w-[180px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] whitespace-nowrap sticky top-0 bg-slate-50 z-20">Date & Time</th>
+                                                                                    <th className="px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] whitespace-nowrap sticky top-0 bg-slate-50 z-20">Procedure Name</th>
+                                                                                    <th className="w-[180px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] whitespace-nowrap sticky top-0 bg-slate-50 z-20">Status</th>
+                                                                                    <th className="w-[180px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] whitespace-nowrap sticky top-0 bg-slate-50 z-20">Gallery Icons</th>
+                                                                                     <th className="w-[100px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] text-center whitespace-nowrap sticky top-0 bg-slate-50 z-20">
+                                                                                         {expandedTab === 'incomplete' ? 'Annotate' : 'Report'}
+                                                                                     </th>
+                                                                                    <th className="w-[100px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] text-center whitespace-nowrap sticky top-0 bg-slate-50 z-20">{expandedTab === 'bins' ? 'Actions' : 'Delete'}</th>
+                                                                                    <th className="w-[120px] px-6 py-4 text-[11px] font-black text-slate-400 tracking-[0.2em] text-center whitespace-nowrap sticky top-0 bg-slate-50 z-20">Download</th>
+                                                                                </tr>
+                                                                            </thead>
+                                                                            <tbody className="divide-y divide-slate-100">
+                                                                                 {(() => {
+                                                                                     const getFilteredProcs = (tab: string) => {
+                                                                                         if (!patient.procedures) return [];
+                                                                                         return patient.procedures.filter((p: any) => {
+                                                                                             if (tab === 'bins') return p.deleted;
+                                                                                           if (tab === 'completed') return !p.deleted && p.report?.finalized;
+                                                                                           if (tab === 'pending') return !p.deleted && (p.status === 'COMPLETED' || p.report) && !p.report?.finalized;
+                                                                                           if (tab === 'incomplete') return !p.deleted && p.status !== 'COMPLETED' && !p.report && (p.mediaStats?.images > 0 || p.mediaStats?.videos > 0);
+                                                                                           return false;
+                                                                                         });
+                                                                                     };
+
+                                                                                     const filteredProcs = getFilteredProcs(expandedTab);
+
+                                                                                     if (filteredProcs.length === 0) {
+                                                                                         return (
+                                                                                             <tr>
+                                                                                                 <td colSpan={7} className="px-6 py-12 text-center">
+                                                                                                     <div className="flex flex-col items-center gap-2">
+                                                                                                        <AlertCircle className="text-slate-200 w-10 h-10" />
+                                                                                                        <p className="text-[13px] font-bold text-slate-400 italic">No {expandedTab} procedures found</p>
+                                                                                                     </div>
+                                                                                                 </td>
+                                                                                             </tr>
+                                                                                         );
+                                                                                     }
+
+                                                                                     return filteredProcs.map((proc: any) => (
+                                                                                         <tr key={proc.id} className="hover:bg-blue-50/20 transition-all duration-300 group/proc border-b border-slate-50 last:border-0">
+                                                                                             <td className="px-6 py-5">
+                                                                                                 <button 
+                                                                                                     onClick={(e) => toggleProcSelect(e, proc.id)} 
+                                                                                                     className={cn(
+                                                                                                         "w-4 h-4 border rounded flex items-center justify-center transition-all",
+                                                                                                         selectedProcIds.has(proc.id) ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white hover:border-blue-400"
+                                                                                                     )}
+                                                                                                 >
+                                                                                                     {selectedProcIds.has(proc.id) && <CheckSquare size={10} />}
+                                                                                                 </button>
+                                                                                             </td>
+                                                                                             <td className="px-6 py-5">
+                                                                                                 <div className="flex flex-col">
+                                                                                                     <span className="text-[14px] font-bold text-slate-800 tracking-tight">
+                                                                                                         {new Date(proc.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                                                                     </span>
+                                                                                                     <span className="text-[11px] text-slate-400 font-medium uppercase tracking-widest mt-0.5">
+                                                                                                         {new Date(proc.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                                                                                                     </span>
+                                                                                                 </div>
+                                                                                             </td>
+                                                                                             <td className="px-6 py-5">
+                                                                                                 <span className="text-[15px] font-bold text-slate-900 capitalize">
+                                                                                                     {proc.type}
+                                                                                                 </span>
+                                                                                             </td>
+                                                                                             <td className="px-6 py-5">
+                                                                                                  {(() => {
+                                                                                                      // Tab 1: Completed
+                                                                                                      if (expandedTab === 'completed' || proc.report?.finalized) {
+                                                                                                         return (
+                                                                                                             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase tracking-widest border border-emerald-100/50 whitespace-nowrap">
+                                                                                                                 <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+                                                                                                                 Completed
+                                                                                                             </span>
+                                                                                                         );
+                                                                                                      }
+                                                                                                      
+                                                                                                      // Tab 2: Pending
+                                                                                                      if (expandedTab === 'pending') {
+                                                                                                          if (proc.report && !proc.report.finalized) {
+                                                                                                              return (
+                                                                                                                  <button 
+                                                                                                                      onClick={(e) => { e.stopPropagation(); openMediaPopup(e, patient, 'reports', proc.id); }}
+                                                                                                                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 text-orange-600 text-[10px] font-black uppercase tracking-widest border border-orange-100/50 hover:bg-orange-100 transition-colors shadow-sm whitespace-nowrap"
+                                                                                                                  >
+                                                                                                                      <span className="w-1 h-1 rounded-full bg-orange-500"></span>
+                                                                                                                      Edit Report
+                                                                                                                  </button>
+                                                                                                              );
+                                                                                                          }
+
+                                                                                                          const hasAnnotated = proc.media?.some((m: any) => m.originId || m.type === 'ANNOTATED');
+                                                                                                          return (
+                                                                                                              <button 
+                                                                                                                  onClick={(e) => { e.stopPropagation(); onStartAnnotate?.(patient, proc); }}
+                                                                                                                  className={cn(
+                                                                                                                      "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors shadow-sm whitespace-nowrap",
+                                                                                                                      hasAnnotated ? "bg-blue-50 text-blue-600 border-blue-100/50 hover:bg-blue-100 resume-annotate-glow" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                                                                                                                  )}
+                                                                                                              >
+                                                                                                                  <span className={cn("w-1 h-1 rounded-full", hasAnnotated ? "bg-blue-600" : "bg-slate-400")}></span>
+                                                                                                                  {hasAnnotated ? "Resume Annotate" : "Start Annotate"}
+                                                                                                              </button>
+                                                                                                          );
+                                                                                                      }
+
+                                                                                                      // Tab 3: Incomplete (Captured)
+                                                                                                      if (expandedTab === 'incomplete') {
+                                                                                                          return (
+                                                                                                              <button 
+                                                                                                                  onClick={(e) => { e.stopPropagation(); openMediaPopup(e, patient, 'images', proc.id); }}
+                                                                                                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest border border-blue-100/50 hover:bg-blue-100 transition-colors shadow-sm whitespace-nowrap"
+                                                                                                              >
+                                                                                                                  <span className="w-1 h-1 rounded-full bg-blue-500"></span>
+                                                                                                                  Captured
+                                                                                                              </button>
+                                                                                                          );
+                                                                                                      }
+
+                                                                                                      // Fallback / Bins
+                                                                                                      if (proc.deleted) {
+                                                                                                          return <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Deleted</span>;
+                                                                                                      }
+
+                                                                                                      return (
+                                                                                                          <button 
+                                                                                                              onClick={(e) => { e.stopPropagation(); onStartProcedure?.(patient, proc.id); }}
+                                                                                                              className="text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-slate-600 transition-colors text-left flex items-center gap-1.5 px-1 whitespace-nowrap"
+                                                                                                          >
+                                                                                                              <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                                                                                                              Pending
+                                                                                                          </button>
+                                                                                                      );
+                                                                                                  })()}
+                                                                                              </td>
+                                                                                             <td className="px-6 py-5">
+                                                                                                 <div className="flex items-center gap-4">
+                                                                                                     <button onClick={(e) => openMediaPopup(e, patient, 'images', proc.id)} className="flex items-center gap-1.5 text-slate-400 hover:text-blue-500 transition-all group/gicon">
+                                                                                                         <ImageIcon size={14} className="text-slate-300 group-hover/gicon:text-blue-500" />
+                                                                                                         <span className="text-[12px] font-bold tabular-nums">{proc.mediaStats?.images || 0}</span>
+                                                                                                     </button>
+                                                                                                     <button onClick={(e) => openMediaPopup(e, patient, 'videos', proc.id)} className="flex items-center gap-1.5 text-slate-400 hover:text-blue-500 transition-all group/gicon">
+                                                                                                         <Play size={12} fill="currentColor" strokeWidth={0} className="text-slate-300 group-hover/gicon:text-blue-500" />
+                                                                                                         <span className="text-[12px] font-bold tabular-nums">{proc.mediaStats?.videos || 0}</span>
+                                                                                                     </button>
+                                                                                                 </div>
+                                                                                             </td>
+                                                                                              <td className="px-6 py-5 text-center">
+                                                                                                  {(() => {
+                                                                                                      if (expandedTab === 'incomplete') {
+                                                                                                          return (
+                                                                                                              <button 
+                                                                                                                  onClick={(e) => { e.stopPropagation(); onStartAnnotate?.(patient, proc); }}
+                                                                                                                  className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
+                                                                                                                  title="Start Annotation"
+                                                                                                              >
+                                                                                                                  <Edit2 size={14} />
+                                                                                                              </button>
+                                                                                                          );
+                                                                                                      }
+                                                                                                      
+                                                                                                      if (expandedTab === 'pending') {
+                                                                                                          const needsReport = !proc.report;
+                                                                                                          return (
+                                                                                                              <button 
+                                                                                                                  onClick={(e) => { 
+                                                                                                                      e.stopPropagation(); 
+                                                                                                                      needsReport ? onStartAnnotate?.(patient, proc) : onEditReport?.(patient, proc); 
+                                                                                                                  }}
+                                                                                                                  className={cn(
+                                                                                                                      "w-8 h-8 rounded-lg flex items-center justify-center mx-auto transition-all shadow-sm",
+                                                                                                                      needsReport ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white" : "bg-blue-50 text-blue-500 hover:bg-blue-600 hover:text-white"
+                                                                                                                  )}
+                                                                                                                  title={needsReport ? "Annotate & Report" : "Edit Report"}
+                                                                                                              >
+                                                                                                                  {needsReport ? <Edit2 size={14} /> : <FileText size={14} />}
+                                                                                                              </button>
+                                                                                                          );
+                                                                                                      }
+
+                                                                                                      // Default (Completed)
+                                                                                                      return (
+                                                                                                          <button 
+                                                                                                              onClick={(e) => { e.stopPropagation(); openMediaPopup(e, patient, 'reports', proc.id); }}
+                                                                                                              className="w-8 h-8 rounded-lg bg-blue-50 text-blue-500 flex items-center justify-center mx-auto hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                                                                                                              title="View Report"
+                                                                                                          >
+                                                                                                              <FileText size={14} />
+                                                                                                          </button>
+                                                                                                      );
+                                                                                                  })()}
+                                                                                              </td>
+                                                                                             <td className="px-6 py-5 text-center">
+                                                                                                 <div className="flex items-center justify-center gap-2">
+                                                                                                     {expandedTab === 'bins' ? (
+                                                                                                         <>
+                                                                                                             <button 
+                                                                                                                 onClick={(e) => handleRestoreProc(e, patient.id, proc.id)}
+                                                                                                                 className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all shadow-sm group/restore"
+                                                                                                                 title="Restore Procedure"
+                                                                                                             >
+                                                                                                                 <RotateCcw size={14} className="group-hover/restore:-rotate-45 transition-transform" />
+                                                                                                             </button>
+                                                                                                             <button 
+                                                                                                                 onClick={(e) => handlePermanentDeleteProc(e, patient.id, proc.id)}
+                                                                                                                 className="w-8 h-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                                                                                                                 title="Delete Forever"
+                                                                                                             >
+                                                                                                                 <Trash2 size={14} />
+                                                                                                             </button>
+                                                                                                         </>
+                                                                                                     ) : (
+                                                                                                         <button 
+                                                                                                             onClick={(e) => handleDeleteProc(e, patient.id, proc.id)}
+                                                                                                             className="w-8 h-8 rounded-lg bg-red-50 text-red-500 flex items-center justify-center mx-auto hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                                                                                                             title="Move to Bin"
+                                                                                                         >
+                                                                                                             <Trash2 size={14} />
+                                                                                                         </button>
+                                                                                                     )}
+                                                                                                 </div>
+                                                                                             </td>
+                                                                                             <td className="px-6 py-5 text-center">
+                                                                                                 <button 
+                                                                                                     onClick={async (e) => {
+                                                                                                         e.stopPropagation();
+                                                                                                         
+                                                                                                         // If this item is checked, we determine if it's a bulk download
+                                                                                                         const isBulk = selectedProcIds.has(proc.id) && selectedProcIds.size > 1;
+                                                                                                         
+                                                                                                         // Base case: check if we are already downloading THIS proc
+                                                                                                         if (downloadingProcs.has(proc.id)) return;
+
+                                                                                                         try {
+                                                                                                             if (isBulk) {
+                                                                                                                // Mark all selected as downloading
+                                                                                                                setDownloadingProcs(prev => {
+                                                                                                                    const next = new Set(prev);
+                                                                                                                    selectedProcIds.forEach(id => next.add(id));
+                                                                                                                    return next;
+                                                                                                                });
+                                                                                                                notify.success("Bulk Download Started", `Preparing ${selectedProcIds.size} procedures for ZIP archive...`);
+
+                                                                                                                // Get full procedure objects
+                                                                                                                const selectedProcs = patient.procedures?.filter((p: any) => selectedProcIds.has(p.id)) || [];
+                                                                                                                await downloadMultipleProceduresZip(patient, selectedProcs, orgData);
+
+                                                                                                                notify.success("Download Complete", "Bulk ZIP archive generated successfully.");
+                                                                                                                setSelectedProcIds(new Set());
+                                                                                                             } else {
+                                                                                                                // Single download
+                                                                                                                setDownloadingProcs(prev => {
+                                                                                                                    const next = new Set(prev);
+                                                                                                                    next.add(proc.id);
+                                                                                                                    return next;
+                                                                                                                });
+                                                                                                                notify.success("Download Started", "Preparing files for ZIP archive...");
+                                                                                                                await downloadProcedureZip(patient, proc, orgData);
+                                                                                                                notify.success("Download Complete", "ZIP archive generated successfully.");
+                                                                                                             }
+                                                                                                         } catch (err) {
+                                                                                                             console.error("Download failed:", err);
+                                                                                                             notify.error("Download Failed", "There was an error generating the ZIP archive.");
+                                                                                                         } finally {
+                                                                                                             setDownloadingProcs(prev => {
+                                                                                                                 const next = new Set(prev);
+                                                                                                                 if (isBulk) {
+                                                                                                                    selectedProcIds.forEach(id => next.delete(id));
+                                                                                                                 } else {
+                                                                                                                    next.delete(proc.id);
+                                                                                                                 }
+                                                                                                                 return next;
+                                                                                                             });
+                                                                                                         }
+                                                                                                     }}
+                                                                                                     className={cn(
+                                                                                                         "w-8 h-8 rounded-lg flex items-center justify-center mx-auto transition-all shadow-sm",
+                                                                                                         downloadingProcs.has(proc.id)
+                                                                                                            ? "bg-slate-100 text-slate-400 cursor-wait"
+                                                                                                            : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-200/50"
+                                                                                                     )}
+                                                                                                     title={downloadingProcs.has(proc.id) ? "Preparing ZIP..." : "Download Procedure ZIP"}
+                                                                                                     disabled={downloadingProcs.has(proc.id)}
+                                                                                                 >
+                                                                                                     {downloadingProcs.has(proc.id) ? (
+                                                                                                         <Loader2 size={14} className="animate-spin" />
+                                                                                                     ) : (
+                                                                                                         <Download size={14} />
+                                                                                                     )}
+                                                                                                 </button>
+                                                                                             </td>
+                                                                                         </tr>
+                                                                                     ));
+                                                                                 })()}
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </motion.tr>
+                                                    )}
+                                                </AnimatePresence>
+                                            </React.Fragment>
+                                        );
+                                    })
+                                )}
+                            </AnimatePresence>
+                        </tbody>
+                    </table>
+                </div>
 
             {/* Pagination Footer */}
             {!isLoading && filteredPatients.length > 0 && (
@@ -694,6 +1304,52 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                     </div>
                 </div>
             )}
+            </div>
+            <style jsx global>{`
+                @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+                
+                .patient-queue-root {
+                    font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, sans-serif;
+                }
+
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 6px;
+                    height: 6px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: #ffffff;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: #e2e8f0;
+                    border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background: #cbd5e1;
+                }
+
+                /* Premium Table Enhancements */
+                .premium-row-shadow {
+                    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.5);
+                }
+
+                .resume-annotate-glow {
+                    animation: status-blue-pulse 2s infinite;
+                }
+
+                @keyframes status-blue-pulse {
+                    0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
+                    70% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+                }
+            `}</style>
+            <ProcedureMediaPopup 
+                isOpen={mediaPopup.isOpen}
+                onClose={() => setMediaPopup(prev => ({ ...prev, isOpen: false }))}
+                patient={mediaPopup.patient}
+                procedures={mediaPopup.patient?.procedures || []}
+                initialTab={mediaPopup.initialTab}
+                initialProcedureId={mediaPopup.initialProcedureId}
+            />
         </div>
     );
 }

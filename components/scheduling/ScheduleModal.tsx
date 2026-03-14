@@ -71,16 +71,18 @@ export function ScheduleModal({
 
             setIsSearching(true);
             try {
-                const results = await searchPatients(patientSearch);
-                // searchPatients returns array directly
-                if (Array.isArray(results)) {
-                    setSearchResults(results.map(p => ({
+                const result = await searchPatients(patientSearch);
+                // searchPatients returns { success, patients }
+                if (result.success && Array.isArray(result.patients)) {
+                    setSearchResults(result.patients.map((p: any) => ({
                         id: p.id,
                         fullName: p.fullName,
                         mrn: p.mrn,
                         dateOfBirth: p.dateOfBirth,
                         gender: p.gender
                     })));
+                } else {
+                    setSearchResults([]);
                 }
             } catch (err) {
                 console.error("Search error:", err);

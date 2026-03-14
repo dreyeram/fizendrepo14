@@ -4,25 +4,16 @@ import React, { useState, useEffect, useRef } from "react";
 import {
     Camera, Clock, FileText, Move3d, PanelRightOpen, Plus,
     RotateCcw, Settings2, StopCircle, User, Video,
-    ZoomIn, ZoomOut, ArrowLeft, AlertCircle, ChevronDown, X
+    ZoomIn, ZoomOut, ArrowLeft, AlertCircle, ChevronDown, X, Trash2, Eye
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Capture } from "@/lib/procedure-data";
 
 // ═══════════════════════════════════════════════════════════
 //  ProcedureToolPanel v5 — Right-Side Control Panel (Clean)
 // ═══════════════════════════════════════════════════════════
 
-interface Capture {
-    id: string;
-    timestamp: string;
-    url: string;
-    type?: "image" | "video";
-    thumbnailUrl?: string;
-    category?: string;
-    segmentIndex?: number;
-    selected?: boolean;
-    [key: string]: any;
-}
+
 
 interface Segment {
     id: string;
@@ -48,8 +39,10 @@ export interface ProcedureToolPanelProps {
     segments: Segment[];
     activeSegmentIndex: number;
     onSetActiveSegment: (i: number) => void;
+    onRemoveSegment?: (i: number) => void;
     onAddSegment: () => void;
     captures: Capture[];
+    onRemoveCapture?: (cap: Capture) => void;
     onOpenStudio: (cap: Capture) => void;
     onPlayVideo: (cap: Capture) => void;
     history: any[];
@@ -63,6 +56,7 @@ export interface ProcedureToolPanelProps {
     settings: any;
     updateSetting: (key: any, value: any) => void;
     onOpenScopeSettings?: () => void;
+    activeScopeName?: string;
 }
 
 export default function ProcedureToolPanel({
@@ -73,23 +67,29 @@ export default function ProcedureToolPanel({
     isCompareMode, onToggleCompare,
     historyExpanded = false, setHistoryExpanded = () => { },
     settings, updateSetting,
-    segments, activeSegmentIndex, onSetActiveSegment, onAddSegment,
+    segments, activeSegmentIndex, onSetActiveSegment, onRemoveSegment, onAddSegment,
     captures, onOpenStudio, onPlayVideo,
     history, comparisonImage, onSelectComparisonImage,
     onBack, onEndProcedure, onOpenScopeSettings,
+    onRemoveCapture, activeScopeName,
 }: ProcedureToolPanelProps) {
     const [activeView, setActiveView] = useState<"images" | "videos">("images");
     const [historyTabs, setHistoryTabs] = useState<{ [procedureId: string]: "image" | "video" | "report" }>({});
     const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
 
+    // [ADDED] Delete Confirmation States
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [captureToDelete, setCaptureToDelete] = useState<Capture | null>(null);
+
     const currentProcId = `P${activeSegmentIndex}`;
 
-    // Filter captures by active segment
+    // Filter captures by active segment and exclude deleted ones
     const currentCaptures = captures.filter(c => {
         const match = c.segmentIndex !== undefined
             ? c.segmentIndex === activeSegmentIndex
             : (c.category === currentProcId || (!c.category && activeSegmentIndex === 0));
-        return match;
+        // [MODIFIED] Exclude deleted captures from the primary gallery
+        return match && !c.deleted;
     });
 
     const imageCaptures = currentCaptures.filter(c => c.type === "image" || !c.type);
@@ -111,64 +111,65 @@ export default function ProcedureToolPanel({
         <>
             <aside className="w-full h-full bg-zinc-950 flex flex-col overflow-hidden select-none relative z-50 pointer-events-auto">
 
-                {/* ══════════════════════════════════════════
-                    1. HEADER
-                ══════════════════════════════════════════ */}
                 <div className="flex flex-col bg-zinc-900/40 backdrop-blur-xl border-b border-white/5 shrink-0 relative">
 
-                    {/* HEADER ROW: [Exit] [Timer] [End] */}
-                    <div className="flex items-center justify-between px-3 py-2.5 min-h-[48px] relative z-20">
-                        {/* LEFT: Exit */}
-                        <div className="flex items-center min-w-[60px] gap-2">
+                    {/* HEADER ROW: [Exit] [Zoom] | [Timer] | [Settings] [End] */}
+                    <div className="flex items-center justify-between px-3 py-3 min-h-[56px] relative z-20">
+                        {/* LEFT: Exit & Zoom */}
+                        <div className="flex-1 flex items-center justify-start gap-2">
                             <button
                                 onClick={onBack}
-                                className="p-1.5 rounded-lg bg-rose-950/50 hover:bg-rose-900 border border-rose-500/20 text-rose-400 hover:text-white transition-all shadow-lg"
+                                className="h-10 w-10 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/20 text-rose-400 hover:text-white transition-all shadow-lg flex items-center justify-center"
                                 title="Exit Procedure"
                             >
-                                <ArrowLeft size={16} />
+                                <ArrowLeft size={18} />
                             </button>
-                            {zoom > 1.01 && (
-                                <motion.div
-                                    initial={{ opacity: 0, scale: 0.8 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.8 }}
-                                    className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 shadow-[0_0_14px_rgba(234,179,8,0.35)] backdrop-blur-md"
-                                >
-                                    <span className="text-[10px] font-black text-amber-300 tabular-nums tracking-wide">
-                                        {(zoom || 1).toFixed(2)}x
-                                    </span>
-                                </motion.div>
-                            )}
+                            
+                            <AnimatePresence>
+                                {zoom > 1.01 && (
+                                    <motion.div
+                                        initial={{ opacity: 0, x: -10, scale: 0.95 }}
+                                        animate={{ opacity: 1, x: 0, scale: 1 }}
+                                        exit={{ opacity: 0, x: -10, scale: 0.95 }}
+                                        className="h-10 px-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.1)] flex items-center gap-2 backdrop-blur-md"
+                                    >
+                                        <ZoomIn size={14} className="text-amber-500/60" />
+                                        <span className="text-[11px] font-black text-amber-500 tabular-nums tracking-wider">
+                                            {(zoom || 1).toFixed(2)}x
+                                        </span>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
                         </div>
 
                         {/* CENTER: Timer */}
-                        <div className="absolute left-1/2 -translate-x-1/2">
-                            <div className={`flex items-center gap-2.5 h-9 px-4 rounded-xl border backdrop-blur-md shadow-inner transition-colors ${isRecording ? "bg-red-950/80 border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "bg-black/40 border-white/10"}`}>
+                        <div className="flex-shrink-0 flex items-center justify-center pointer-events-none">
+                            <div className={`flex items-center gap-2.5 h-10 px-5 rounded-xl border backdrop-blur-md shadow-inner transition-all duration-500 ${isRecording ? "bg-red-950/80 border-red-500/50 shadow-[0_0_25px_rgba(239,68,68,0.25)] ring-1 ring-red-500/20" : "bg-black/60 border-white/10"}`}>
                                 {isRecording ? (
-                                    <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]" />
+                                    <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_#ef4444]" />
                                 ) : (
-                                    <Clock size={12} className="text-emerald-400" />
+                                    <Clock size={13} className="text-emerald-400" />
                                 )}
-                                <span ref={timerDisplayRef} className={`text-sm font-mono font-bold tabular-nums leading-none tracking-tight ${isRecording ? "text-red-400" : "text-white"}`}>
+                                <span ref={timerDisplayRef} className={`text-[15px] font-mono font-black tabular-nums leading-none tracking-tight ${isRecording ? "text-red-400" : "text-white"}`}>
                                     {formatTime(timer)}
                                 </span>
                             </div>
                         </div>
 
                         {/* RIGHT: Scope Settings & End Button */}
-                        <div className="flex items-center gap-3">
+                        <div className="flex-1 flex items-center justify-end gap-2">
                             {onOpenScopeSettings && (
                                 <button
                                     onClick={onOpenScopeSettings}
-                                    className="h-9 px-3 rounded-xl bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 font-bold text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-lg shadow-indigo-500/10 transition-all active:scale-95 border border-indigo-500/30"
+                                    className="h-10 w-10 rounded-xl bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 font-bold flex items-center justify-center shadow-lg transition-all active:scale-95 border border-indigo-500/20"
                                     title="Open Scope Settings"
                                 >
-                                    <Settings2 size={14} />
+                                    <Settings2 size={18} />
                                 </button>
                             )}
                             <button
                                 onClick={onEndProcedure}
-                                className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/50"
+                                className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] uppercase tracking-[0.1em] flex items-center gap-2.5 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/30"
                             >
                                 <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
                                 <span>End</span>
@@ -176,54 +177,80 @@ export default function ProcedureToolPanel({
                         </div>
                     </div>
 
-                    {/* ROW 2: Patient Info & Session Tabs */}
-                    <div className="flex flex-col px-4 py-2 bg-black/40 border-t border-white/5 relative z-10 shrink-0">
-                        {/* Patient Info */}
-                        <div className="flex items-center min-w-0 mb-2 mt-1">
-                            <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-                                <span className="text-[14px] font-bold text-white truncate leading-none" title={patient.name}>{patient.name}</span>
-                                <span className="text-white/10 text-[10px] font-thin">|</span>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="text-[10px] font-black text-zinc-500 uppercase tracking-tighter tabular-nums whitespace-nowrap">
-                                        {(patient.age !== undefined && patient.age !== null) ? `${patient.age}Y` : "??Y"} · {patient.gender?.[0] || patient.gender || "U"}
-                                    </span>
-                                    <span className="text-white/10 text-[10px] font-thin">|</span>
-                                    <span className="text-[10px] font-mono font-black text-indigo-400/50 truncate" title="Patient MRN / ID">
-                                        {patient.mrn || patient.refId || `#${patient.id.slice(-4)}`}
-                                    </span>
-                                </div>
-                            </div>
+
+                    {/* ROW 2: Patient Info */}
+                    <div className="flex items-center gap-2.5 px-4 py-3 bg-white/[0.02] border-t border-white/5 relative z-10 shrink-0 w-full overflow-hidden">
+                        {/* Name Pill Container */}
+                        <div className="flex-1 min-w-0">
+                            <span className="text-[15px] font-semibold text-white truncate block leading-tight" title={patient.name}>
+                                {patient.name}
+                            </span>
                         </div>
+                        
+                        {/* Age/Gender Pill */}
+                        <div className="flex items-center px-2.5 py-1 rounded-lg bg-zinc-800/40 border border-zinc-700/30 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] shrink-0">
+                            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest tabular-nums leading-none">
+                                {(patient.age !== undefined && patient.age !== null) ? `${patient.age}Y` : "??Y"}
+                                <span className="mx-1 text-zinc-700">·</span>
+                                {patient.gender?.[0] || patient.gender || "U"}
+                            </span>
+                        </div>
+
+                        {/* MRN Pill */}
+                        <div className="flex items-center px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] shrink-0">
+                            <span className="text-[10px] font-bold text-indigo-400/90 tracking-wider tabular-nums leading-none">
+                                {patient.mrn || patient.refId || `#${patient.id.slice(-4)}`}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* ROW 3: Session Tabs */}
+                    <div className="flex flex-col px-4 pt-1 pb-2 bg-black/40 border-t border-white/5 relative z-10 shrink-0">
 
                         {/* Session Tabs */}
                         <div className="flex items-center gap-2 pb-1.5">
-                            <div className="flex-1 overflow-x-auto scroll-smooth custom-scrollbar-h">
-                                <div className="flex items-center gap-1.5 pr-4 pb-1">
+                            <div className="flex-1 overflow-x-auto scroll-smooth custom-scrollbar-h pt-2">
+                                <div className="flex items-center gap-1.5 pr-4 pb-1 pt-1">
                                     {segments.sort((a, b) => a.index - b.index).map((s, idx) => {
                                         const pid = `P${idx + 1}`;
                                         const isActive = s.index === activeSegmentIndex;
                                         return (
-                                            <button
-                                                key={`segment-tab-${idx}-${s.id || s.index}`}
-                                                onClick={() => onSetActiveSegment(s.index)}
-                                                className={`h-7 px-3.5 rounded-lg text-[10px] font-black transition-all active:scale-95 shrink-0 ${isActive
-                                                    ? "bg-white text-black shadow-[0_4px_12px_rgba(255,255,255,0.2)]"
-                                                    : "bg-white/5 text-zinc-500 hover:text-white hover:bg-white/10"
-                                                    }`}
-                                            >
-                                                {pid}
-                                            </button>
+                                            <div key={`segment-tab-${idx}-${s.id || s.index}`} className="group relative shrink-0">
+                                                <button
+                                                    onClick={() => onSetActiveSegment(s.index)}
+                                                    className={`h-9 px-5 rounded-xl text-[11px] font-black transition-all active:scale-95 flex items-center justify-center ${isActive
+                                                        ? "bg-white text-black"
+                                                        : "bg-white/5 text-zinc-500 hover:text-white hover:bg-white/10"
+                                                        }`}
+                                                >
+                                                    {pid}
+                                                </button>
+                                                {onRemoveSegment && segments.length > 1 && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onRemoveSegment(s.index);
+                                                        }}
+                                                        className="absolute -top-2 -right-1.5 w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-600 shadow-lg z-20"
+                                                        title="Delete Session"
+                                                    >
+                                                        <X size={12} strokeWidth={4} />
+                                                    </button>
+                                                )}
+                                            </div>
                                         );
                                     })}
                                 </div>
                             </div>
-                            <button
-                                onClick={onAddSegment}
-                                className="w-8 h-7 rounded-lg flex items-center justify-center bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/20 transition-all active:scale-95 shrink-0 shadow-lg shadow-emerald-900/10"
-                                title="Add New Session"
-                            >
-                                <Plus size={14} strokeWidth={3} />
-                            </button>
+                                {segments.length < 5 && (
+                                    <button
+                                        onClick={onAddSegment}
+                                        className="w-8 h-7 rounded-lg flex items-center justify-center bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/20 transition-all active:scale-95 shrink-0 shadow-lg shadow-emerald-900/10"
+                                        title="Add New Session"
+                                    >
+                                        <Plus size={14} strokeWidth={3} />
+                                    </button>
+                                )}
                         </div>
                     </div>
                 </div>
@@ -232,6 +259,19 @@ export default function ProcedureToolPanel({
                     2. SESSION GALLERY
                 ══════════════════════════════════════════ */}
                 <div className="flex flex-col flex-1 min-h-0 border-b border-white/5">
+                    {/* Scope Source Indicator Pill */}
+                    <div className="px-6 pt-4 pb-1">
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 w-fit shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]">
+                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981] animate-pulse" />
+                            <span className="text-[9px] font-black text-white/40 uppercase tracking-[0.15em] leading-none">
+                                Capturing from
+                            </span>
+                            <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide leading-none">
+                                {activeScopeName || "Primary Scope"}
+                            </span>
+                        </div>
+                    </div>
+
                     <div className="px-6 py-3 border-b border-white/5 bg-white/[0.01]">
                         <div className="flex p-1 bg-white/5 rounded-xl border border-white/5">
                             <button
@@ -254,8 +294,33 @@ export default function ProcedureToolPanel({
                             <div className="grid grid-cols-2 gap-3 min-h-0">
                                 {imageCaptures.map((cap, i) => (
                                     <div key={cap.id || i} className="aspect-square rounded-[24px] bg-zinc-900/50 border border-white/5 overflow-hidden group cursor-pointer relative shadow-lg hover:border-indigo-500/50 hover:shadow-indigo-500/10 transition-all duration-300">
-                                        <img src={cap.url} onClick={() => onOpenStudio(cap)} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt="" />
+                                        <img src={cap.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt="" />
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                                        
+                                        {/* Preview Eye Icon (Center) */}
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); onOpenStudio(cap); }}
+                                            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 flex items-center justify-center text-white opacity-0 scale-50 group-hover:opacity-100 group-hover:scale-100 transition-all duration-300 z-20 hover:bg-white/20"
+                                            title="View Image"
+                                        >
+                                            <Eye size={20} />
+                                        </button>
+
+                                        {/* Delete Icon (Bottom Right - like annotation section) */}
+                                        {onRemoveCapture && (
+                                            <button
+                                                onClick={(e) => { 
+                                                    e.stopPropagation(); 
+                                                    setCaptureToDelete(cap);
+                                                    setShowDeleteConfirm(true);
+                                                }}
+                                                className="absolute bottom-3 right-3 w-8 h-8 rounded-full bg-rose-500/80 backdrop-blur-md border border-rose-400/50 flex items-center justify-center text-white opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 z-10 hover:bg-rose-600"
+                                                title="Delete Image"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        )}
+
                                         <button
                                             onClick={(e) => { e.stopPropagation(); onSelectComparisonImage(cap.url, false); }}
                                             className="absolute top-3 right-3 w-9 h-9 rounded-2xl bg-black/40 backdrop-blur-xl border border-white/10 flex items-center justify-center text-white/70 hover:text-white hover:bg-indigo-600 transition-all opacity-0 translate-y-[-10px] group-hover:opacity-100 group-hover:translate-y-0 z-10"
@@ -263,6 +328,8 @@ export default function ProcedureToolPanel({
                                         >
                                             <Move3d size={16} />
                                         </button>
+
+                                        {/* Timestamp (Bottom Left) */}
                                         <div className="absolute bottom-3 left-3 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300">
                                             <span className="text-[9px] font-black text-white/50 uppercase tracking-widest bg-black/40 backdrop-blur-md px-2 py-1 rounded-lg border border-white/5">
                                                 {cap.timestamp?.split(" ")[1] || "Captured"}
@@ -581,6 +648,75 @@ export default function ProcedureToolPanel({
                                 </div>
                                 <div className="flex-1 relative w-full bg-[#09090b] overflow-hidden">
                                     <iframe src={`${activePdfUrl}#view=FitH&toolbar=0&navpanes=0&scrollbar=0`} className="w-full h-full border-0" title="PDF Report" />
+                                </div>
+                            </motion.div>
+                        </div>
+                     )}
+                </AnimatePresence>
+
+                {/* [ADDED] DELETE CONFIRMATION MODAL (Split Layout) */}
+                <AnimatePresence>
+                    {showDeleteConfirm && captureToDelete && (
+                        <div key="delete-confirm-overlay" className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-8">
+                            <motion.div 
+                                initial={{ scale: 0.9, opacity: 0 }} 
+                                animate={{ scale: 1, opacity: 1 }} 
+                                exit={{ scale: 0.9, opacity: 0 }}
+                                className="bg-[#0D0D0F] border border-white/10 rounded-[32px] overflow-hidden max-w-4xl w-full flex shadow-[0_32px_128px_rgba(0,0,0,0.8)] relative"
+                            >
+                                {/* Close Button */}
+                                <button 
+                                    onClick={() => setShowDeleteConfirm(false)}
+                                    className="absolute top-6 right-6 w-10 h-10 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-all z-20"
+                                >
+                                    <X size={20} />
+                                </button>
+
+                                {/* LEFT: Image Preview (50%) */}
+                                <div className="w-1/2 bg-black flex items-center justify-center relative border-r border-white/5">
+                                    <img 
+                                        src={captureToDelete.url} 
+                                        className="max-w-full max-h-[500px] object-contain" 
+                                        alt="Preview to delete" 
+                                    />
+                                    <div className="absolute top-6 left-6 px-4 py-2 rounded-full bg-black/40 border border-white/10 backdrop-blur-md">
+                                        <span className="text-[10px] font-black text-white/60 uppercase tracking-widest">Selected Image</span>
+                                    </div>
+                                </div>
+
+                                {/* RIGHT: Confirmation (50%) */}
+                                <div className="w-1/2 p-12 flex flex-col justify-center gap-8">
+                                    <div className="space-y-4">
+                                        <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 mb-6">
+                                            <Trash2 size={32} />
+                                        </div>
+                                        <h3 className="text-3xl font-black text-white tracking-tight leading-tight">
+                                            Delete this image?
+                                        </h3>
+                                        <p className="text-zinc-500 text-base leading-relaxed">
+                                            The image will be moved to the <span className="text-indigo-400 font-bold">Bin</span> in the annotation section. You can still recover it from there later.
+                                        </p>
+                                    </div>
+
+                                    <div className="flex flex-col gap-3 pt-4">
+                                        <button 
+                                            onClick={() => {
+                                                if (onRemoveCapture) onRemoveCapture(captureToDelete);
+                                                setShowDeleteConfirm(false);
+                                                setCaptureToDelete(null);
+                                            }}
+                                            className="w-full py-5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-sm uppercase tracking-[0.2em] shadow-lg shadow-rose-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
+                                        >
+                                            <Trash2 size={18} />
+                                            <span>Delete Image</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => setShowDeleteConfirm(false)}
+                                            className="w-full py-5 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-bold text-sm uppercase tracking-[0.1em] transition-all"
+                                        >
+                                            Keep Image
+                                        </button>
+                                    </div>
                                 </div>
                             </motion.div>
                         </div>

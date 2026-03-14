@@ -77,15 +77,19 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
     const loadPatients = async () => {
         setIsLoading(true);
         try {
-            const results = await searchPatients("");
-            // Filter out already deleted patients
-            const activePatients = results.filter((p: any) => !p.deletedAt);
-            setPatients(activePatients.map((p: any) => ({
-                id: p.id,
-                fullName: p.fullName,
-                mrn: p.mrn,
-                procedures: p.procedures
-            })));
+            const result = await searchPatients("");
+            if (result.success && result.patients) {
+                // Filter out already deleted patients
+                const activePatients = result.patients.filter((p: any) => !p.deletedAt);
+                setPatients(activePatients.map((p: any) => ({
+                    id: p.id,
+                    fullName: p.fullName,
+                    mrn: p.mrn,
+                    procedures: p.procedures
+                })));
+            } else {
+                setPatients([]);
+            }
         } catch (e) {
             console.error("Failed to load patients", e);
         }
@@ -258,8 +262,8 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
                 <button
                     onClick={() => setView('patients')}
                     className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${view === 'patients'
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                         }`}
                 >
                     Active Patients ({patients.length})
@@ -267,8 +271,8 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
                 <button
                     onClick={() => setView('trash')}
                     className={`px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${view === 'trash'
-                            ? 'bg-rose-500 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        ? 'bg-rose-500 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                         }`}
                 >
                     <Trash2 size={14} /> Trash ({trashedPatients.length})
@@ -316,13 +320,13 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
                                         key={patient.id}
                                         onClick={() => togglePatient(patient.id)}
                                         className={`flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition-all ${selectedPatients.has(patient.id)
-                                                ? 'bg-rose-50 border-rose-200'
-                                                : 'bg-white border-slate-200 hover:border-slate-300'
+                                            ? 'bg-rose-50 border-rose-200'
+                                            : 'bg-white border-slate-200 hover:border-slate-300'
                                             }`}
                                     >
                                         <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${selectedPatients.has(patient.id)
-                                                ? 'bg-rose-500 border-rose-500 text-white'
-                                                : 'border-slate-300'
+                                            ? 'bg-rose-500 border-rose-500 text-white'
+                                            : 'border-slate-300'
                                             }`}>
                                             {selectedPatients.has(patient.id) && <Check size={14} />}
                                         </div>

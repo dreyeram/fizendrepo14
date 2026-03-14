@@ -320,6 +320,7 @@ export function CustomScopeCanvasLayer({ videoRef, aspectRatioCorrection = '16:9
         // We must mirror that by centering the mask hole.
         if (!isEditing && activeScopeId) {
             const rVal = (geo.width * Math.min(contW, contH)) / 2;
+            // Match the 5% safety margin from CameraFeed.tsx
             const fillScale = Math.min(contW / (rVal * 2), contH / (rVal * 2));
 
             // In active view, the "hole" is always centered because 
@@ -452,7 +453,7 @@ export function CustomScopeCanvasLayer({ videoRef, aspectRatioCorrection = '16:9
             style={{ touchAction: isDrawingMode ? 'none' : 'auto', cursor: isDrawingMode && !hasShape ? 'crosshair' : 'default' }}
         >
             {/* SVG: full-container mask + conditional grid */}
-            <svg width="100%" height="100%" className="absolute inset-0 pointer-events-none">
+            <svg width="100%" height="100%" className="absolute inset-0 pointer-events-none" style={{ overflow: 'visible' }}>
                 <defs>
                     <mask id={maskId}>
                         <rect width="100%" height="100%" fill="white" />
@@ -466,7 +467,7 @@ export function CustomScopeCanvasLayer({ videoRef, aspectRatioCorrection = '16:9
                 </defs>
 
                 <rect width="100%" height="100%"
-                    fill={hasActiveScope ? "rgb(0,0,0)" : "rgba(0,0,0,0.72)"}
+                    fill={hasActiveScope ? "rgba(0,0,0,0.65)" : (isDrawingMode ? "rgba(0,0,0,0.72)" : "transparent")}
                     mask={`url(#${maskId})`}
                 />
 

@@ -6,7 +6,7 @@ import {
     Camera, X, Video, Move3d, AlertCircle, ArrowLeft,
     ZoomIn, ZoomOut, RotateCcw, FileText
 } from "lucide-react";
-import { endProcedure, createProcedure } from "@/app/actions/procedure";
+import { endProcedure, createProcedure, softDeleteMedia } from "@/app/actions/procedure";
 import { getPatientHistory } from "@/app/actions/patient";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useSessionStore } from "@/lib/store/session.store";
@@ -51,8 +51,8 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
 
     const { settings, updateSetting } = useSettings() || { settings: {}, updateSetting: () => { } };
     const {
-        segments, activeSegmentIndex, setActiveSegment, addSegment, updateSegment,
-        captures, addCapture, setCaptures
+        segments, activeSegmentIndex, setActiveSegment, addSegment, updateSegment, removeSegment,
+        captures, addCapture, setCaptures, sessionTimer, tickSessionTimer
     } = useSessionStore();
 
     // ── Camera ──
@@ -80,8 +80,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const [leftCompareOffset, setLeftCompareOffset] = useState({ x: 0, y: 0 });
     const [rightCompareOffset, setRightCompareOffset] = useState({ x: 0, y: 0 });
 
-    // ── Timer (per-segment) ──
-    const segmentTimersRef = useRef<Map<number, number>>(new Map());
+    // ── Timer (Session-wide) ──
     const timerDisplayRef = useRef<HTMLSpanElement>(null);
 
     // ── UI ──
@@ -106,7 +105,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
 
     // ── Zoom State ──
     const { scopes, activeScopeId, mainZoom, setMainZoom } = useScopeStore();
-    const [zoomRange] = useState({ min: 1, max: 12 });
+    const [zoomRange] = useState({ min: 1, max: 6 });
     const [zoomPanOffset, setZoomPanOffset] = useState({ x: 0, y: 0 });
     const [mainSize, setMainSize] = useState({ w: 1, h: 1 });
     const [panelASize, setPanelASize] = useState({ w: 1, h: 1 });
@@ -116,36 +115,26 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const mainFeedConstraintsRef = useRef<HTMLDivElement>(null);
     const panelARef = useRef<HTMLDivElement>(null);
     const panelBRef = useRef<HTMLDivElement>(null);
+    const previewConstraintsRef = useRef<HTMLDivElement>(null);
     const isDraggingRef = useRef(false);
 
     // ═══════════════════════════════════════
     //  BOOT
     // ═══════════════════════════════════════
 
-    // Tick the timer for the currently-active segment every second
+    // Tick the session-wide timer every second
     useEffect(() => {
         const iv = setInterval(() => {
-            const map = segmentTimersRef.current;
-            const prev = map.get(activeSegmentIndex) || 0;
-            map.set(activeSegmentIndex, prev + 1);
+            tickSessionTimer();
             if (timerDisplayRef.current) {
-                const s = prev + 1;
+                // Peek at next value for smooth UI update
+                const nextSec = sessionTimer + 1;
                 timerDisplayRef.current.textContent =
-                    `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
+                    `${Math.floor(nextSec / 60).toString().padStart(2, "0")}:${(nextSec % 60).toString().padStart(2, "0")}`;
             }
         }, 1000);
         return () => clearInterval(iv);
-    }, [activeSegmentIndex]);
-
-    // When the active segment changes, immediately update the display
-    // to show the restored elapsed time for the newly-selected segment
-    useEffect(() => {
-        const s = segmentTimersRef.current.get(activeSegmentIndex) || 0;
-        if (timerDisplayRef.current) {
-            timerDisplayRef.current.textContent =
-                `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
-        }
-    }, [activeSegmentIndex]);
+    }, [tickSessionTimer, sessionTimer]);
 
     useEffect(() => {
         if (!patient?.id) return;
@@ -276,6 +265,24 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             } catch (err) { console.error("[ProcedureMode] Capture save error:", err); }
         })();
     }, [procedureId, activeSegmentIndex, segments, playSound, isCompareMode]);
+    
+    // ── Remove Capture ──
+    const handleRemoveCapture = useCallback(async (cap: Capture) => {
+        // 1. Local update - mark as deleted
+        setCaptures(prev => prev.map(c => c.id === cap.id ? { ...c, deleted: true } : c));
+        
+        // 2. Database update (if it exists in DB)
+        if (cap.dbMediaId) {
+            try {
+                const result = await softDeleteMedia(cap.dbMediaId);
+                if (!result.success) {
+                    console.error("[ProcedureMode] Failed to soft delete media from DB:", result.error);
+                }
+            } catch (err) {
+                console.error("[ProcedureMode] DB deletion error:", err);
+            }
+        }
+    }, [setCaptures]);
 
     // ── Recording ─────────────────────────────────────────────────────────
     // Strategy:
@@ -456,18 +463,43 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const handleSwitchCamera = useCallback(() => { }, []);
     const handleOpenGallery = useCallback((cap: Capture) => { setPreviewImage(cap.url); }, []);
 
+    const isAddingSegment = useRef(false);
     const handleAddSegment = useCallback(async () => {
+        if (isAddingSegment.current) return;
+        if (segments.length >= 5) {
+            console.warn("[ProcedureMode] Maximum segment limit (5) reached.");
+            return;
+        }
+        
+        isAddingSegment.current = true;
         try {
             const { getSeededDoctorId } = await import("@/app/actions/auth");
             const docId = await getSeededDoctorId();
             if (!docId) return;
-            const newIndex = segments.length + 1;
+
+            // Robust index calculation: find max existing index and add 1
+            const maxIndex = segments.length > 0 
+                ? Math.max(...segments.map(s => s.index)) 
+                : 0;
+            const newIndex = maxIndex + 1;
+            
             const tempId = `temp-${Date.now()}`;
             addSegment({ id: tempId, index: newIndex, status: "draft", createdAt: new Date(), type: "generic" });
+            
             createProcedure({ patientId: patient.id, doctorId: docId, type: "generic" })
-                .then(res => { if (res.success && res.procedureId) updateSegment(newIndex, { id: res.procedureId }); })
-                .catch(err => console.error("Create procedure error:", err));
-        } catch (err) { console.error("Failed to create segment:", err); }
+                .then(res => { 
+                    if (res.success && res.procedureId) {
+                        updateSegment(newIndex, { id: res.procedureId }); 
+                    }
+                })
+                .catch(err => console.error("Create procedure error:", err))
+                .finally(() => {
+                    isAddingSegment.current = false;
+                });
+        } catch (err) { 
+            console.error("Failed to create segment:", err); 
+            isAddingSegment.current = false;
+        }
     }, [segments, patient.id, addSegment, updateSegment]);
 
     useEffect(() => {
@@ -495,6 +527,10 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     }, [isRecording]);
 
     const performFinish = async () => {
+        if (captures.length === 0) {
+            if (onBack) onBack();
+            return;
+        }
         if (onGenerateReport) onGenerateReport(captures);
         (async () => {
             if (pendingUploads.length > 0) {
@@ -531,8 +567,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                 case " ": case "enter": e.preventDefault(); captureRef.current(); break;
                 case "r": e.preventDefault(); toggleRecRef.current(); break;
                 case "f": e.preventDefault(); freezeRef.current(); break;
-                case "c": e.preventDefault(); setIsCompareMode(p => !p); break;
-                case "=": case "+": e.preventDefault(); setMainZoom((p: number) => Math.min(p + 0.5, 12)); break;
+                case "=": case "+": e.preventDefault(); setMainZoom((p: number) => Math.min(p + 0.5, 6)); break;
                 case "-": e.preventDefault(); setMainZoom((p: number) => Math.max(p - 0.5, 1)); break;
                 case "z": e.preventDefault(); setMainZoom(1); break;
                 case "escape":
@@ -922,15 +957,59 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         </div>
 
                     ) : previewImage ? (
-                        <div className="w-full h-full relative flex items-center justify-center bg-black/80 backdrop-blur-md">
-                            <img src={previewImage} className="max-w-full max-h-full object-contain" alt="Captured" />
-                            <button onClick={() => setPreviewImage(null)}
-                                className="absolute top-4 right-4 z-[80] w-12 h-12 rounded-full bg-black/80 hover:bg-red-600 flex items-center justify-center text-white/70 hover:text-white transition-all border border-white/20 shadow-2xl">
-                                <X size={24} />
+                        <div 
+                            ref={previewConstraintsRef}
+                            className="w-full h-full relative flex items-center justify-center bg-black/80 backdrop-blur-md cursor-pointer"
+                            onClick={() => setPreviewImage(null)}
+                        >
+                            <img src={previewImage} className="max-w-full max-h-full object-contain pointer-events-none" alt="Captured" />
+                            
+                            {/* PIP Toggle Button */}
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setShowPip(p => !p); }}
+                                className={`absolute top-6 right-6 h-9 px-4 rounded-full flex items-center gap-2 text-[10px] font-black uppercase tracking-widest transition-all border shadow-lg z-[90] ${showPip ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-black/60 border-white/10 text-white/60'}`}
+                            >
+                                <Video size={14} />
+                                <span>{showPip ? "Hide PIP" : "Show PIP"}</span>
                             </button>
-                            <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-indigo-600/20 border border-indigo-500/30 backdrop-blur-md z-20">
+
+                            <div className="absolute top-4 left-4 px-4 py-2 rounded-full bg-indigo-600/20 border border-indigo-500/30 backdrop-blur-md z-20 pointer-events-none">
                                 <span className="text-[11px] font-black text-indigo-100 uppercase tracking-widest">Image Preview</span>
                             </div>
+
+                            {/* LIVE PIP during Preview */}
+                            <AnimatePresence>
+                                {showPip && (
+                                    <motion.div
+                                        drag dragConstraints={previewConstraintsRef} dragElastic={0} dragMomentum={false}
+                                        initial={{ opacity: 0, scale: 0.8 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        exit={{ opacity: 0, scale: 0.8 }}
+                                        onDragStart={() => { isDraggingRef.current = true; }}
+                                        onDragEnd={() => { setTimeout(() => { isDraggingRef.current = false; }, 250); }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (!isDraggingRef.current) {
+                                                setPreviewImage(null);
+                                            }
+                                        }}
+                                        className="absolute bottom-6 right-6 z-[60] w-48 h-48 rounded-full border-2 border-white/20 shadow-2xl overflow-hidden bg-black ring-4 ring-black/50 cursor-grab active:cursor-grabbing hover:border-indigo-500 shadow-indigo-500/20 group/pip"
+                                    >
+                                        <CameraFeed
+                                            ref={feedRef}
+                                            className="w-full h-full"
+                                            pipMode
+                                            aspectRatioCorrection={settings.aspectRatio}
+                                        />
+                                        <div className="absolute inset-0 bg-black/0 group-hover/pip:bg-black/40 flex items-center justify-center transition-colors">
+                                            <div className="flex flex-col items-center gap-1 opacity-0 group-hover/pip:opacity-100">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]" />
+                                                <span className="text-[8px] font-black text-white uppercase tracking-widest">Live Feed</span>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
                         </div>
 
                     ) : (
@@ -1033,7 +1112,8 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                     <div className="w-[25%] flex flex-col min-w-0 max-h-screen overflow-hidden border-l border-white/5">
                         <ProcedureToolPanel
                             patient={patient}
-                            timer={segmentTimersRef.current.get(activeSegmentIndex) || 0}
+                            activeScopeName={scopes.find(s => s.id === activeScopeId)?.name}
+                            timer={sessionTimer}
                             timerDisplayRef={timerDisplayRef}
                             formatTime={formatTime}
                             onCapture={handleCapture}
@@ -1049,8 +1129,10 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                             segments={segments as any}
                             activeSegmentIndex={activeSegmentIndex}
                             onSetActiveSegment={setActiveSegment}
+                            onRemoveSegment={removeSegment}
                             onAddSegment={handleAddSegment}
                             captures={captures}
+                            onRemoveCapture={handleRemoveCapture}
                             onOpenStudio={handleOpenGallery as any}
                             onPlayVideo={(cap: any) => setPlayingVideo(cap)}
                             history={history}
@@ -1058,7 +1140,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                             onSelectComparisonImage={handleSelectComparisonImage}
                             onBack={handleBack}
                             onEndProcedure={() => setShowEndConfirm(true)}
-                            duration={formatTime(segmentTimersRef.current.get(activeSegmentIndex) || 0)}
+                            duration={formatTime(sessionTimer)}
                             settings={settings}
                             updateSetting={updateSetting}
                             historyExpanded={historyExpanded}
@@ -1077,10 +1159,10 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                             className="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl max-w-md w-full text-center shadow-2xl">
                             <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
                             <h3 className="text-xl font-bold text-white mb-2">End Procedure?</h3>
-                            <p className="text-zinc-400 text-sm mb-8">This will finalize the session. You'll be redirected to the Report Editor.</p>
+                            <p className="text-zinc-400 text-sm mb-8">This will finalize the procedure. You'll be redirected to the Annotate Section.</p>
                             <div className="flex gap-4 justify-center">
                                 <button onClick={() => setShowEndConfirm(false)} className="px-6 py-3 rounded-xl bg-zinc-800 text-white font-bold hover:bg-zinc-700">Cancel</button>
-                                <button onClick={performFinish} className="px-6 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg shadow-red-900/20">Confirm Finish</button>
+                                <button onClick={performFinish} className="px-6 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-500 shadow-lg shadow-red-900/20">Finish & Go to Annotate</button>
                             </div>
                         </motion.div>
                     </div>
@@ -1092,7 +1174,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                     onConfirm={() => { if (onBack) onBack(); }}
                     captures={captures}
                     patientName={patient.name || patient.fullName}
-                    duration={formatTime(segmentTimersRef.current.get(activeSegmentIndex) || 0)}
+                    duration={formatTime(sessionTimer)}
                 />
                 {showRecordingWarning && (
                     <div key="rec-warning" className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center">

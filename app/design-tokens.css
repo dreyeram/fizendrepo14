@@ -1,0 +1,148 @@
+/* ============================================================
+   GOOGLE FONTS — DM Sans + DM Serif Display
+   DM Sans: weights 300, 400, 500, 600 + italic 400
+   DM Serif Display: regular + italic
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap');
+
+:root {
+  /**
+   * DESIGN SYSTEM — Medical SaaS
+   * Font Pair : DM Sans (UI/Body) + DM Serif Display (Headings)
+   * Rule      : Two fonts only. No monospace. Minimum 16px for body.
+   * Updated   : Tabular numerics replace monospace for IDs & timestamps.
+   */
+
+  /* ── FONT FAMILIES ──────────────────────────────────────── */
+  /* ALL UI text: body, labels, buttons, data, timestamps, MRN */
+  --font-family-sans: 'DM Sans', '-apple-system', 'BlinkMacSystemFont', sans-serif;
+  /* ONLY for: page titles, modal headings, section display text */
+  --font-family-serif: 'DM Serif Display', 'Georgia', serif;
+  /* monospace removed — tabular-nums on DM Sans handles data alignment */
+
+  /* ── FONT SIZES ─────────────────────────────────────────── */
+  /* Sub-16px: ONLY for non-readable decorative/structural labels  */
+  --font-size-xs: 0.75rem;
+  /* 12px — Table column headers (ALL CAPS + wide tracking) */
+  --font-size-sm: 0.875rem;
+  /* 14px — Status tags, filter chips, secondary metadata   */
+  /* 16px floor — everything a user reads must be at or above this */
+  --font-size-base: 1rem;
+  /* 16px — Body text, patient names, dates, row content ✅ */
+  --font-size-md: 1.0625rem;
+  /* 17px — Search bars, input fields, form labels          */
+  --font-size-lg: 1.125rem;
+  /* 18px — Section headers, sidebar navigation             */
+  --font-size-xl: 1.25rem;
+  /* 20px — Modal titles          → --font-family-serif     */
+  --font-size-2xl: 1.5rem;
+  /* 24px — Page/dashboard titles → --font-family-serif     */
+  --font-size-3xl: 1.875rem;
+  /* 30px — Hero stat numbers, KPI cards                    */
+
+  /* ── SEMANTIC TYPOGRAPHY ────────────────────────────────── */
+  /* Structural labels (non-readable, decorative) */
+  --text-label-xs: 0.75rem;
+  /* 12px: Column headers — use ALL CAPS + --tracking-wide  */
+  --text-label-sm: 0.875rem;
+  /* 14px: Filter buttons, tab labels, action buttons        */
+  /* Readable body — 16px minimum enforced */
+  --text-body-base: 1rem;
+  /* 16px: Patient names, date labels, all table row text    */
+  --text-body-lg: 1.0625rem;
+  /* 17px: Search input, primary form content                */
+  /* Data values — DM Sans tabular figures, no monospace */
+  --text-data: 1rem;
+  /* 16px: MRN, phone numbers, timestamps, IDs              */
+
+  /* ── FONT WEIGHTS ───────────────────────────────────────── */
+  --font-weight-light: 300;
+  /* Serif display subtitles, decorative use only           */
+  --font-weight-regular: 400;
+  /* Body text, data cells, descriptions                    */
+  --font-weight-medium: 500;
+  /* Labels, table headers, nav items, timestamps           */
+  --font-weight-semibold: 600;
+  /* Buttons, patient names, key data points, modal titles  */
+
+  /* ── LINE HEIGHTS ───────────────────────────────────────── */
+  --line-height-tight: 1.2;
+  /* DM Serif Display headings only                         */
+  --line-height-snug: 1.4;
+  /* Buttons, tags, compact table rows                      */
+  --line-height-base: 1.65;
+  /* All body text — 16px × 1.65 = comfortable reading      */
+  --line-height-relaxed: 1.8;
+  /* Clinical notes, multi-line descriptions, instructions  */
+
+  /* ── LETTER SPACING ─────────────────────────────────────── */
+  --tracking-tight: -0.025em;
+  /* DM Serif Display headings — tighten display type       */
+  --tracking-normal: 0em;
+  /* Body, data cells, timestamps — never squeeze           */
+  --tracking-wide: 0.07em;
+  /* ALL-CAPS structural labels: STATUS · GENDER · MRN      */
+  --tracking-wider: 0.12em;
+  /* Micro decorative labels in table column headers        */
+
+  /* ── NUMERIC RENDERING ──────────────────────────────────── */
+  /* Replaces monospace for MRN / phone / timestamps           */
+  /* tabular-nums = fixed-width digits, columns stay aligned   */
+  --font-features-data: 'tnum' 1;
+  /* Tabular (fixed-width) numerals                    */
+  --font-variant-data: tabular-nums;
+  /* CSS property shorthand                            */
+
+  /* ── CORE COLORS ────────────────────────────────────────── */
+  --color-primary-50: #eff6ff;
+  /* Row selection background                             */
+  --color-primary-100: #dbeafe;
+  /* Border of selected rows                              */
+  --color-primary-600: #2563eb;
+  /* Main action buttons, checkmarks                      */
+  --color-primary-700: #1d4ed8;
+  /* Hover state for primary buttons                      */
+
+  --color-slate-50: #f8fafc;
+  /* Table header background                              */
+  --color-slate-100: #f1f5f9;
+  /* Row separators                                       */
+  --color-slate-200: #e2e8f0;
+  /* Card borders                                         */
+  --color-slate-300: #cbd5e1;
+  /* Placeholder text                                     */
+  --color-slate-400: #94a3b8;
+  /* Secondary text (e.g. 'SELF' physician label)         */
+  --color-slate-500: #64748b;
+  /* Label text                                           */
+  --color-slate-600: #475569;
+  /* Time & date text                                     */
+  --color-slate-700: #334155;
+  /* Phone number, MRN text                               */
+  --color-slate-900: #0f172a;
+  /* Primary body heading text                            */
+
+  --color-rose-50: #fff1f2;
+  /* Cancelled/critical state backgrounds                 */
+  --color-rose-600: #e11d48;
+  /* Sign out, delete, critical alert actions             */
+
+  --color-success-50: #f0fdf4;
+  /* Active, admitted, normal state background            */
+  --color-success-600: #16a34a;
+  /* Active, admitted, normal state text/icon             */
+  --color-warning-50: #fffbeb;
+  /* Pending, awaiting review background                  */
+  --color-warning-600: #d97706;
+  /* Pending, awaiting review text/icon                   */
+  --color-info-50: #f0f9ff;
+  /* Informational notice background                      */
+  --color-info-600: #0284c7;
+  /* Informational notice text/icon                       */
+
+  /* ── SHADOWS & GLASS ────────────────────────────────────── */
+  --shadow-premium: 0 10px 15px -3px rgba(0, 0, 0, 0.05), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 20px 60px -10px rgba(15, 23, 42, 0.15);
+  --glass-blur: blur(12px);
+}

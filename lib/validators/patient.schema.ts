@@ -19,7 +19,7 @@ export const createPatientSchema = z.object({
         .string()
         .trim()
         .min(2, 'Name must be at least 2 characters')
-        .max(100, 'Name must not exceed 100 characters')
+        .max(22, 'Name must not exceed 22 characters')
         .regex(/^[a-zA-Z\s.'-]+$/, 'Name can only contain letters, spaces, and common punctuation'),
     dateOfBirth: z
         .string()
@@ -28,9 +28,8 @@ export const createPatientSchema = z.object({
         .or(z.date().optional()),
     age: z
         .number()
-        .int()
-        .min(0, 'Age cannot be negative')
-        .max(150, 'Age must be realistic')
+        .min(0.01, 'Age must be at least 1 month')
+        .max(150, 'Age must be realistic (max 150)')
         .optional(),
     gender: z.enum(['Male', 'Female', 'Other']).optional(),
     mobile: z
@@ -43,6 +42,7 @@ export const createPatientSchema = z.object({
         .string()
         .trim()
         .email('Please enter a valid email address')
+        .max(255, 'Email is too long')
         .optional()
         .or(z.literal('')),
     address: z

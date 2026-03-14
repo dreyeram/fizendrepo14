@@ -67,10 +67,27 @@ export async function getSystemStatus() {
         powerStable = true; // Mock for dev
     }
 
+    // 4. USB Storage Detection
+    let usbConnected = false;
+    if (isLinux) {
+        // Look for mounts in /media (standard for Raspberry Pi) or /mnt
+        const result = await executeCommand("lsblk -o MOUNTPOINT -nr | grep -E '^/media|^/mnt'");
+        if (result.success && result.message) {
+            usbConnected = true;
+        }
+    } else {
+        // Windows: Check logical disks with drive type 2 (Removable)
+        const result = await executeCommand('wmic logicaldisk where drivetype=2 get deviceid');
+        if (result.success && result.message && result.message.includes(':')) {
+            usbConnected = true;
+        }
+    }
+
     return {
         wifi: ssid,
         camera: cameraDetected,
         power: powerStable ? 'stable' : 'warning',
+        usb: usbConnected,
         timestamp: new Date().toISOString()
     };
 }

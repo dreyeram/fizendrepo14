@@ -18,6 +18,7 @@ interface MediaGalleryModalProps {
     procedure?: any;
     patient?: any;
     organizationName?: string;
+    initialTab?: 'images' | 'videos' | 'report';
 }
 
 export default function MediaGalleryModal({
@@ -25,7 +26,8 @@ export default function MediaGalleryModal({
     onClose,
     procedure,
     patient,
-    organizationName = "Medical Center"
+    organizationName = "Medical Center",
+    initialTab
 }: MediaGalleryModalProps) {
     const [activeTab, setActiveTab] = useState<'images' | 'videos' | 'report'>('images');
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -43,10 +45,14 @@ export default function MediaGalleryModal({
 
     useEffect(() => {
         if (isOpen) {
-            // Smart auto-selection logic
-            if (images.length > 0) setActiveTab('images');
-            else if (videos.length > 0) setActiveTab('videos');
-            else if (report) setActiveTab('report');
+            if (initialTab) {
+                setActiveTab(initialTab);
+            } else {
+                // Smart auto-selection logic
+                if (images.length > 0) setActiveTab('images');
+                else if (videos.length > 0) setActiveTab('videos');
+                else if (report) setActiveTab('report');
+            }
 
             if (report) {
                 // Check if we already have it to avoid reload frame blinking

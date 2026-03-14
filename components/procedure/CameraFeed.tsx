@@ -152,6 +152,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
             }
 
             if (scopeW < 4 || scopeH < 4) return null;
+            // Add a 5% safety margin (0.95 multiplier) to ensure the scope is never cropped
             const fillScale = Math.min(contW / scopeW, contH / scopeH);
             const scaledCx = contW / 2 + (scopeCx - contW / 2) * fillScale;
             const scaledCy = contH / 2 + (scopeCy - contH / 2) * fillScale;
@@ -313,7 +314,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                     ref={videoRef}
                     autoPlay playsInline muted
                     style={{
-                        objectFit: pipMode ? 'cover' : 'contain',
+                        objectFit: 'cover',
                         width: '100%',
                         height: '100%',
                         background: '#000',

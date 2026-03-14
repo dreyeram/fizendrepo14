@@ -1,6 +1,8 @@
+//components/reports/ReportPage.tsx
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     ArrowLeft, Check, Wand2, Printer, FileText,
@@ -17,8 +19,13 @@ import { resolveImageUrl } from "@/lib/utils/image";
 import InlineDropdown, { BilateralDropdown } from "./InlineDropdown";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LETTERHEAD — matches PDF generator layout exactly
-// Fix 1: Logo zone enlarged to 120x56 to match PDF proportions
+// LETTERHEAD
+// Changes:
+//   • Zone C now shows the report-name pill (dynamic, not hardcoded) + date below
+//   • Consultant name / role removed from header
+//   • Row 2 patient info is full-width (no pill in row 2)
+//   • Name truncated to 25 chars
+//   • Ref falls back to "Self" instead of "N/A"
 // ─────────────────────────────────────────────────────────────────────────────
 const Letterhead = ({ doctor, patient, hospital, reportName }: any) => {
     const orgName = hospital?.name || 'PREDISCAN HOSPITAL';
@@ -28,11 +35,6 @@ const Letterhead = ({ doctor, patient, hospital, reportName }: any) => {
     const rawLogo = hospital?.logoPath || '';
     const orgLogo = useMemo(() => resolveImageUrl(rawLogo), [rawLogo]);
 
-    const doctorName = doctor?.fullName || 'Shara';
-    const doctorDegree = doctor?.degree ? `, ${doctor.degree}` : '';
-    const doctorRole = doctor?.role || 'Consultant Specialist';
-    const hasDrPrefix = doctorName.toLowerCase().startsWith('dr');
-    const formattedDrName = hasDrPrefix ? doctorName : `Dr. ${doctorName}`;
     const [logoError, setLogoError] = React.useState(false);
 
     const contactStr = [orgAddress, orgPhone, orgEmail].filter(Boolean).join('  |  ');
@@ -41,13 +43,17 @@ const Letterhead = ({ doctor, patient, hospital, reportName }: any) => {
         + '  '
         + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
+    // Truncate patient name to 25 chars
+    const patientName = (patient?.fullName || patient?.name || 'N/A').toUpperCase();
+    const truncatedName = patientName.length > 25 ? patientName.slice(0, 25) : patientName;
+
     return (
         <div className="flex flex-col mb-4 select-none bg-white w-full">
 
-            {/* ══ ROW 1: Logo | Name+Contact | Consultant+Date ══ */}
+            {/* ══ ROW 1: Logo | Name+Contact | Report Title Pill + Date ══ */}
             <div className="flex items-center gap-4" style={{ minHeight: '64px' }}>
 
-                {/* Zone A — Logo: 120×56 px to match PDF proportions */}
+                {/* Zone A — Logo */}
                 <div className="shrink-0 flex items-center justify-center" style={{ width: '120px', height: '56px' }}>
                     {orgLogo && !logoError ? (
                         <img
@@ -65,20 +71,22 @@ const Letterhead = ({ doctor, patient, hospital, reportName }: any) => {
 
                 {/* Zone B — Hospital name + contact */}
                 <div className="flex-1 flex flex-col gap-[4px] min-w-0">
-                    <h1 className="text-[20px] font-bold text-blue-900 uppercase tracking-wide leading-tight">{orgName}</h1>
-                    {contactStr && <p className="text-[10px] text-zinc-500 leading-tight">{contactStr}</p>}
+                    <h1 className="text-[22px] font-bold text-blue-900 uppercase tracking-wide leading-tight">{orgName}</h1>
+                    {contactStr && <p className="text-[12px] text-zinc-500 leading-tight">{contactStr}</p>}
                 </div>
 
-                {/* Zone C — Consultant + Date */}
-                <div className="shrink-0 flex flex-col items-end gap-[3px] text-right" style={{ minWidth: '220px' }}>
-                    <div className="flex items-center gap-2">
-                        <span className="text-[9px] text-zinc-400 font-medium">Consultant Name :</span>
-                        <span className="text-[12px] font-bold text-zinc-900">{formattedDrName}{doctorDegree}</span>
+                {/* Zone C — Report Title Pill + Date (replaces consultant name/role) */}
+                <div className="shrink-0 flex flex-col items-end justify-center gap-[6px]" style={{ minWidth: '240px' }}>
+                    {/* Report name pill */}
+                    <div className="px-4 py-[7px] rounded-xl w-full flex items-center justify-center" style={{ backgroundColor: '#1c41a5' }}>
+                        <h2 className="text-[12px] font-bold text-white uppercase tracking-tight text-center leading-tight">
+                            {reportName || 'DIAGNOSTIC NASAL ENDOSCOPY REPORT'}
+                        </h2>
                     </div>
-                    <span className="text-[9px] text-zinc-500 leading-tight">{doctorRole}</span>
-                    <div className="flex items-center gap-2 mt-[2px]">
-                        <span className="text-[9px] text-zinc-400 font-medium">Report Date :</span>
-                        <span className="text-[10px] font-bold text-zinc-900">{dateStr}</span>
+                    {/* Date below pill */}
+                    <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-zinc-400 font-medium">Report Date :</span>
+                        <span className="text-[12px] font-bold text-zinc-900">{dateStr}</span>
                     </div>
                 </div>
             </div>
@@ -86,28 +94,19 @@ const Letterhead = ({ doctor, patient, hospital, reportName }: any) => {
             {/* ══ Navy Divider ══ */}
             <div className="w-full my-2" style={{ height: '1.5px', backgroundColor: '#122266' }} />
 
-            {/* ══ ROW 2: 4 demo columns | Report title pill ══ */}
-            <div className="flex items-center gap-3">
-                <div className="grid grid-cols-4 gap-x-4" style={{ width: '56%' }}>
-                    {[
-                        { label: 'MRN No', value: patient?.mrn || 'N/A' },
-                        { label: 'Name', value: (patient?.fullName || patient?.name || 'N/A').toUpperCase() },
-                        { label: 'Age/Sex', value: `${patient?.age || '--'} Yrs / ${patient?.gender || '--'}` },
-                        { label: 'Ref', value: (patient?.referringDoctor || 'N/A').toUpperCase() },
-                    ].map((col) => (
-                        <div key={col.label} className="flex flex-col gap-[2px] min-w-0">
-                            <span className="text-[9px] text-zinc-400 font-medium leading-none">{col.label}</span>
-                            <span className="text-[11px] font-bold text-zinc-900 truncate leading-tight">{col.value}</span>
-                        </div>
-                    ))}
-                </div>
-                <div className="flex-1 flex items-center justify-center">
-                    <div className="px-5 py-[8px] rounded-xl w-full flex items-center justify-center" style={{ backgroundColor: '#1c41a5' }}>
-                        <h2 className="text-[11px] font-bold text-white uppercase tracking-tight text-center leading-tight">
-                            {reportName || 'DIAGNOSTIC NASAL ENDOSCOPY REPORT'}
-                        </h2>
+            {/* ══ ROW 2: Patient info — full width, 4 columns, proper spacing ══ */}
+            <div className="grid grid-cols-4 gap-x-6">
+                {[
+                    { label: 'MRN No', value: patient?.mrn || 'N/A' },
+                    { label: 'Name', value: truncatedName },
+                    { label: 'Age/Sex', value: `${patient?.age || '--'} Yrs / ${patient?.gender || '--'}` },
+                    { label: 'Ref', value: (patient?.referringDoctor || 'Self').toUpperCase() },
+                ].map((col) => (
+                    <div key={col.label} className="flex flex-col gap-[2px] min-w-0">
+                        <span className="text-[11px] text-zinc-400 font-medium leading-none">{col.label}</span>
+                        <span className="text-[13px] font-bold text-zinc-900 truncate leading-tight">{col.value}</span>
                     </div>
-                </div>
+                ))}
             </div>
         </div>
     );
@@ -132,8 +131,8 @@ const VisualSelectorA4 = ({ segments, activeTabId, onSelect }: any) => (
                         <FileText size={16} />
                     </div>
                     <div>
-                        <h4 className="text-[10px] font-bold text-zinc-800 leading-tight">{t.name}</h4>
-                        <p className="text-[8px] text-zinc-400">{t.shortName}</p>
+                        <h4 className="text-[12px] font-bold text-zinc-800 leading-tight">{t.name}</h4>
+                        <p className="text-[10px] text-zinc-400">{t.shortName}</p>
                     </div>
                 </button>
             ))}
@@ -148,14 +147,14 @@ function RenderField({ field, value, onChange, colSpan = 1 }: any) {
     const isFullWidth = field.type === 'textarea' || field.type === 'bilateral' || colSpan === 2;
     const label = (
         <div className="w-[160px] shrink-0">
-            <span className="text-[9px] uppercase tracking-widest font-bold text-zinc-400 select-none whitespace-nowrap overflow-hidden text-ellipsis block">{field.label}</span>
+            <span className="text-[11px] uppercase tracking-wider font-bold text-zinc-400 select-none whitespace-nowrap overflow-hidden text-ellipsis block">{field.label}</span>
         </div>
     );
     if (field.type === 'textarea') {
         return (
             <div className="group mt-4 mb-6">
                 <div className="flex items-center mb-2">
-                    {field.label && <span className="text-[10px] uppercase tracking-widest font-extrabold text-blue-900/60 mr-3">{field.label}</span>}
+                    {field.label && <span className="text-[12px] uppercase tracking-wider font-extrabold text-blue-900/60 mr-3">{field.label}</span>}
                     <div className="h-px flex-1 bg-zinc-100" />
                 </div>
                 <textarea value={value || ''} onChange={(e) => onChange(e.target.value)}
@@ -204,10 +203,10 @@ const PrescriptionSection = ({ prescriptions = [], availableMedicines = [], onCh
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                     <div className="w-1.5 h-4 bg-blue-900 rounded-full" />
-                    <h2 className="text-[11px] font-black text-blue-900 uppercase tracking-[0.15em]">Prescription / Rx</h2>
+                    <h2 className="text-[13px] font-black text-blue-900 uppercase tracking-[0.1em]">Prescription / Rx</h2>
                 </div>
                 {!isAdding && (
-                    <button onClick={() => setIsAdding(true)} className="text-[9px] font-bold text-blue-700 hover:text-blue-900 uppercase tracking-wider flex items-center gap-1.5 bg-blue-50 px-3 py-1 rounded-full transition-colors border border-blue-100 shadow-sm">
+                    <button onClick={() => setIsAdding(true)} className="text-[11px] font-bold text-blue-700 hover:text-blue-900 uppercase tracking-wider flex items-center gap-1.5 bg-blue-50 px-3 py-1 rounded-full transition-colors border border-blue-100 shadow-sm">
                         <Plus size={10} /> Add Rx
                     </button>
                 )}
@@ -223,10 +222,10 @@ const PrescriptionSection = ({ prescriptions = [], availableMedicines = [], onCh
                     </div>
                     <div className="space-y-1">
                         {filteredMeds.map((m: any) => (
-                            <button key={m.id} onClick={() => addMed(m)} className="w-full text-left p-2 hover:bg-zinc-50 rounded-lg text-[11px] flex items-center justify-between group transition-colors">
+                            <button key={m.id} onClick={() => addMed(m)} className="w-full text-left p-2 hover:bg-zinc-50 rounded-lg text-xs flex items-center justify-between group transition-colors">
                                 <div className="flex flex-col">
                                     <span className="font-bold text-zinc-800">{m.name}</span>
-                                    <span className="text-[9px] text-zinc-400 font-serif italic">{m.genericName}</span>
+                                    <span className="text-[11px] text-zinc-400 font-serif italic">{m.genericName}</span>
                                 </div>
                                 <Plus size={12} className="text-zinc-200 group-hover:text-blue-600" />
                             </button>
@@ -237,17 +236,17 @@ const PrescriptionSection = ({ prescriptions = [], availableMedicines = [], onCh
             )}
             <div className="space-y-2">
                 {prescriptions.map((p: any, i: number) => (
-                    <div key={i} className="flex items-center gap-4 text-[11px] group bg-zinc-50/50 p-2.5 rounded-lg border border-transparent hover:border-zinc-200 hover:bg-white transition-all">
+                    <div key={i} className="flex items-center gap-4 text-xs group bg-zinc-50/50 p-2.5 rounded-lg border border-transparent hover:border-zinc-200 hover:bg-white transition-all">
                         <div className="flex-1 flex flex-col min-w-0">
                             <span className="font-bold text-zinc-900 truncate uppercase">{p.name}</span>
-                            <span className="text-[9px] text-zinc-400 font-serif italic truncate">{p.generic}</span>
+                            <span className="text-[11px] text-zinc-400 font-serif italic truncate">{p.generic}</span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <input className="w-16 bg-transparent border-none text-[10px] text-zinc-600 p-0 focus:ring-0 placeholder:text-zinc-200" placeholder="Dosage" value={p.dosage} onChange={(e) => updateMed(i, "dosage", e.target.value)} />
+                            <input className="w-16 bg-transparent border-none text-[12px] text-zinc-600 p-0 focus:ring-0 placeholder:text-zinc-200" placeholder="Dosage" value={p.dosage} onChange={(e) => updateMed(i, "dosage", e.target.value)} />
                             <div className="h-3 w-px bg-zinc-100" />
-                            <input className="w-12 bg-transparent border-none text-[10px] text-zinc-600 p-0 focus:ring-0 text-center" value={p.frequency} onChange={(e) => updateMed(i, "frequency", e.target.value)} />
+                            <input className="w-12 bg-transparent border-none text-[12px] text-zinc-600 p-0 focus:ring-0 text-center" value={p.frequency} onChange={(e) => updateMed(i, "frequency", e.target.value)} />
                             <div className="h-3 w-px bg-zinc-100" />
-                            <input className="w-12 bg-transparent border-none text-[10px] text-zinc-600 p-0 focus:ring-0 text-center" value={p.duration} onChange={(e) => updateMed(i, "duration", e.target.value)} />
+                            <input className="w-12 bg-transparent border-none text-[12px] text-zinc-600 p-0 focus:ring-0 text-center" value={p.duration} onChange={(e) => updateMed(i, "duration", e.target.value)} />
                             <button onClick={() => removeMed(i)} className="opacity-0 group-hover:opacity-100 text-zinc-300 hover:text-red-500 transition-all"><Trash2 size={10} /></button>
                         </div>
                     </div>
@@ -259,8 +258,6 @@ const PrescriptionSection = ({ prescriptions = [], availableMedicines = [], onCh
 };
 
 // ─── Shape helper ───────────────────────────────────────────────────────────
-// Returns inline styles for the image wrapper div.
-// Using inline styles because Tailwind purges dynamically-constructed class names.
 const shapeStyle = (scopeShape?: string | null): React.CSSProperties => {
     const base: React.CSSProperties = { overflow: 'hidden', border: 'none', boxShadow: 'none', outline: 'none' };
     switch (scopeShape) {
@@ -268,26 +265,20 @@ const shapeStyle = (scopeShape?: string | null): React.CSSProperties => {
             return { ...base, borderRadius: '50%', aspectRatio: '1 / 1' };
         case 'square':
             return { ...base, borderRadius: '12px', aspectRatio: '1 / 1' };
-        default: // rectangle
+        case 'rectangle':
+            return { ...base, borderRadius: '8px', aspectRatio: '16 / 9' };
+        default:
             return { ...base, borderRadius: '8px', aspectRatio: '16 / 9' };
     }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DRAGGABLE IMAGE GALLERY
-// • Drag-to-reorder (HTML5 DnD)
-// • Lightbox zoom
-// • Replace button → gallery picker popup
-//   – shows ALL available media from the session
-//   – already-selected images are marked with a blue tick indicator
-//   – clicking a non-selected image swaps it into that slot
-//   – clicking an already-selected image is a no-op (can't duplicate)
 // ─────────────────────────────────────────────────────────────────────────────
 const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, onCaptionChange }: any) => {
     const [dragging, setDragging] = useState<number | null>(null);
     const [dragOver, setDragOver] = useState<number | null>(null);
     const [lightbox, setLightbox] = useState<string | null>(null);
-    // replacingIndex = which slot the user clicked "replace" on
     const [replacingIndex, setReplacingIndex] = useState<number | null>(null);
 
     const uniqueIds: string[] = useMemo(
@@ -295,13 +286,11 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
         [imageIds]
     );
 
-    // All media available in this session (full pool to pick from)
     const allMedia: any[] = useMemo(
         () => (mediaCache || []).filter((m: any) => m.url || m.base64),
         [mediaCache]
     );
 
-    // ── Drag handlers ──
     const handleDragStart = (e: React.DragEvent, index: number) => {
         setDragging(index); e.dataTransfer.effectAllowed = 'move';
     };
@@ -319,10 +308,8 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
     };
     const handleDragEnd = () => { setDragging(null); setDragOver(null); };
 
-    // ── Replace handler: swap slot at replacingIndex with newId ──
     const handleReplace = (newId: string) => {
         if (replacingIndex === null) return;
-        // Prevent duplicate — if newId already occupies another slot, do nothing
         if (uniqueIds.includes(newId) && uniqueIds[replacingIndex] !== newId) {
             setReplacingIndex(null);
             return;
@@ -366,7 +353,6 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                             style={{ maxHeight: '80vh' }}
                             onClick={(e) => e.stopPropagation()}
                         >
-                            {/* Header */}
                             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 shrink-0">
                                 <div>
                                     <h3 className="text-[13px] font-black text-zinc-900 tracking-tight">
@@ -382,10 +368,9 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                                 </button>
                             </div>
 
-                            {/* Grid of all available images */}
                             <div className="overflow-y-auto p-4">
                                 {allMedia.length === 0 ? (
-                                    <p className="text-center py-10 text-[11px] text-zinc-400 italic">No images available in this session.</p>
+                                    <p className="text-center py-10 text-[11px] text-zinc-400 italic">No images available in this procedure.</p>
                                 ) : (
                                     <div className="grid grid-cols-3 gap-3">
                                         {allMedia.map((m: any) => {
@@ -407,35 +392,30 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                                                     `}
                                                     style={pickerShape}
                                                 >
-                                                    {/* Thumbnail in native shape */}
                                                     <img src={imgSrc} alt="" className="w-full h-full object-cover" />
 
-                                                    {/* "Current slot" badge */}
                                                     {isCurrentSlot && (
-                                                        <div className="absolute top-1.5 left-1.5 bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                                                        <div className="absolute top-1.5 left-1.5 bg-blue-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide">
                                                             Current
                                                         </div>
                                                     )}
 
-                                                    {/* "Already used" badge */}
                                                     {isUsedElsewhere && (
-                                                        <div className="absolute top-1.5 left-1.5 bg-zinc-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-0.5">
+                                                        <div className="absolute top-1.5 left-1.5 bg-zinc-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-0.5">
                                                             <Check size={7} /> Used
                                                         </div>
                                                     )}
 
-                                                    {/* Hover "select" overlay for free images */}
                                                     {!isCurrentSlot && !isUsedElsewhere && (
                                                         <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/15 transition-all flex items-end justify-center pb-2 opacity-0 group-hover:opacity-100">
-                                                            <span className="text-[8px] font-black text-blue-700 bg-white/90 px-2 py-0.5 rounded-full uppercase tracking-wide shadow">
+                                                            <span className="text-[10px] font-black text-blue-700 bg-white/90 px-2 py-0.5 rounded-full uppercase tracking-wide shadow">
                                                                 Select
                                                             </span>
                                                         </div>
                                                     )}
 
-                                                    {/* Timestamp label */}
                                                     {m.timestamp && (
-                                                        <div className="absolute bottom-1 right-1 text-[7px] text-white/80 bg-black/40 px-1 rounded font-medium">
+                                                        <div className="absolute bottom-1 right-1 text-[9px] text-white/80 bg-black/40 px-1 rounded font-medium">
                                                             {m.timestamp}
                                                         </div>
                                                     )}
@@ -454,7 +434,7 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
             {uniqueIds.length > 1 && (
                 <div className="flex items-center gap-1 mb-3">
                     <GripVertical size={10} className="text-zinc-300" />
-                    <span className="text-[8px] text-zinc-300 uppercase tracking-widest font-bold">Drag to reorder</span>
+                    <span className="text-[10px] text-zinc-300 uppercase tracking-wider font-bold">Drag to reorder</span>
                 </div>
             )}
 
@@ -485,9 +465,7 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                             >
                                 <img src={m.url || m.base64} className="w-full h-full object-cover" alt={`Fig ${i + 1}`} />
 
-                                {/* Hover overlay — zoom + replace */}
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                    {/* Zoom */}
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setLightbox(m.url || m.base64); }}
                                         className="w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow-md hover:bg-white transition-all"
@@ -496,35 +474,30 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                                         <ZoomIn size={12} className="text-zinc-700" />
                                     </button>
 
-                                    {/* Replace */}
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setReplacingIndex(i); }}
                                         className="w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow-md hover:bg-blue-600 hover:text-white transition-all group/rep"
                                         title="Replace image"
                                     >
-                                        {/* Swap icon — two arrows */}
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-700 group-hover/rep:text-white transition-colors">
                                             <path d="M7 16V4m0 0L3 8m4-4l4 4" /><path d="M17 8v12m0 0l4-4m-4 4l-4-4" />
                                         </svg>
                                     </button>
                                 </div>
 
-                                {/* Index badge */}
-                                <div className="absolute top-2 left-2 w-5 h-5 bg-blue-900/80 backdrop-blur text-white text-[9px] flex items-center justify-center rounded-full font-bold pointer-events-none">
+                                <div className="absolute top-2 left-2 w-6 h-6 bg-blue-900/80 backdrop-blur text-white text-[11px] flex items-center justify-center rounded-full font-bold pointer-events-none">
                                     {i + 1}
                                 </div>
 
-                                {/* Drag handle badge */}
                                 <div className="absolute top-2 right-2 w-5 h-5 bg-black/40 backdrop-blur text-white flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 transition-all pointer-events-none">
                                     <GripVertical size={10} />
                                 </div>
                             </div>
 
-                            {/* Caption */}
                             <div className="flex items-center gap-1 px-1">
-                                <span className="text-[9px] text-zinc-400 italic font-bold whitespace-nowrap">Fig {i + 1}</span>
+                                <span className="text-[11px] text-zinc-400 italic font-bold whitespace-nowrap">Fig {i + 1}</span>
                                 <input
-                                    className="flex-1 min-w-0 text-[9px] bg-transparent border-none focus:ring-0 italic text-zinc-500 placeholder:text-zinc-300 p-0 h-4"
+                                    className="flex-1 min-w-0 text-[11px] bg-transparent border-none focus:ring-0 italic text-zinc-500 placeholder:text-zinc-300 p-0 h-4"
                                     placeholder="Add caption..."
                                     value={captionsMap?.[id] || ''}
                                     onChange={(e) => onCaptionChange(id, e.target.value)}
@@ -541,10 +514,6 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HISTORY REPORTS PANEL
-// Collapsible list in sidebar. Clicking a report:
-//   1. Tries to fetch the saved PDF from /api/report-serve?id=<procedureId>
-//   2. If found → opens full-screen PDF viewer modal
-//   3. If not found (not yet finalized) → falls back to form-data summary popup
 // ─────────────────────────────────────────────────────────────────────────────
 const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
     const [expanded, setExpanded] = useState(false);
@@ -557,26 +526,21 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
         if (!procedures?.length) return [];
         return procedures
             .filter((p: any) => {
-                // Must have report content
                 if (!p.report?.content) return false;
-                // Parse it
                 let parsed: any = {};
                 try { parsed = typeof p.report.content === 'string' ? JSON.parse(p.report.content) : p.report.content; } catch (_) { return false; }
-                // Must have at least one section with a real filled value
                 const hasSectionData = (parsed.formData?.printableSections || []).some((sec: any) =>
                     sec.items?.some((it: any) => {
                         const v = String(it.value || '').trim();
                         return v && v !== 'undefined' && v !== 'null';
                     })
                 );
-                // OR must have prescriptions
                 const hasPrescriptions = (parsed.prescriptions || []).length > 0;
                 return hasSectionData || hasPrescriptions;
             })
             .map((p: any) => {
                 let parsed: any = {};
                 try { parsed = typeof p.report.content === 'string' ? JSON.parse(p.report.content) : p.report.content; } catch (_) { }
-                // Resolve the procedure type — prefer template name over raw type key
                 const rawType = p.type || parsed.procedureType || '';
                 return {
                     id: p.id,
@@ -587,14 +551,12 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                 };
             })
             .sort((a: any, b: any) => {
-                // Sort newest first; null dates go to the end
                 if (!a.date) return 1;
                 if (!b.date) return -1;
                 return new Date(b.date).getTime() - new Date(a.date).getTime();
             });
     }, [procedures]);
 
-    // Only show date if it's a real parseable date
     const formatDate = (d: string | null) => {
         if (!d) return null;
         const dt = new Date(d);
@@ -602,15 +564,12 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
         return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
     };
 
-    // ── Click handler: fetch PDF first, fall back to form-data summary ──
     const handleReportClick = async (r: any) => {
         setLoadingId(r.id);
         setErrorId(null);
         try {
-            // Hit the report-serve endpoint
             const res = await fetch(`/api/report-serve?id=${encodeURIComponent(r.id)}`);
             if (res.ok && res.headers.get('content-type')?.includes('pdf')) {
-                // PDF exists → create an object URL and open the PDF viewer
                 const blob = await res.blob();
                 const url = URL.createObjectURL(blob);
                 const title = [
@@ -619,11 +578,9 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                 ].filter(Boolean).join(' — ');
                 setPdfModal({ url, title });
             } else {
-                // PDF not saved yet → fall back to form-data summary
                 setFallbackReport(r);
             }
         } catch (_) {
-            // Network error → fall back gracefully
             setFallbackReport(r);
         } finally {
             setLoadingId(null);
@@ -648,7 +605,6 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                             initial={{ opacity: 0, y: 20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.97 }}
                             className="bg-white w-full h-full max-w-5xl rounded-2xl overflow-hidden flex flex-col shadow-2xl"
                         >
-                            {/* Header */}
                             <div className="h-14 border-b border-zinc-100 flex items-center justify-between px-6 shrink-0">
                                 <div className="flex items-center gap-3">
                                     <FileText className="text-blue-600" size={18} />
@@ -657,7 +613,6 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    {/* Download button */}
                                     <a
                                         href={pdfModal.url}
                                         download="report.pdf"
@@ -671,8 +626,6 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                                     </button>
                                 </div>
                             </div>
-
-                            {/* PDF iframe */}
                             <iframe
                                 src={`${pdfModal.url}#toolbar=0&navpanes=0`}
                                 className="flex-1 w-full border-none"
@@ -683,7 +636,7 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                 )}
             </AnimatePresence>
 
-            {/* ── Fallback: form-data summary popup (when PDF not saved yet) ── */}
+            {/* ── Fallback: form-data summary popup ── */}
             <AnimatePresence>
                 {fallbackReport && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -693,7 +646,6 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                             className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[80vh] flex flex-col overflow-hidden"
                             onClick={(e) => e.stopPropagation()}>
 
-                            {/* Header */}
                             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 shrink-0">
                                 <div>
                                     <h3 className="text-[13px] font-black text-zinc-900 uppercase tracking-tight">
@@ -712,20 +664,19 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                                 <button onClick={() => setFallbackReport(null)} className="p-1.5 text-zinc-400 hover:text-zinc-700"><X size={18} /></button>
                             </div>
 
-                            {/* Body — form data summary */}
                             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
                                 {(fallbackReport.content?.formData?.printableSections || []).map((sec: any, si: number) => {
                                     const hasData = sec.items?.some((it: any) => it.value && String(it.value).trim() && it.value !== 'undefined');
                                     if (!hasData) return null;
                                     return (
                                         <div key={si}>
-                                            <h4 className="text-[9px] font-black text-blue-900 uppercase tracking-widest mb-2 pb-1 border-b border-zinc-100">{sec.title}</h4>
+                                            <h4 className="text-[11px] font-black text-blue-900 uppercase tracking-wider mb-2 pb-1 border-b border-zinc-100">{sec.title}</h4>
                                             <div className="space-y-1.5">
                                                 {sec.items.map((item: any, ii: number) => {
                                                     const val = String(item.value || '').trim();
                                                     if (!val || val === 'undefined') return null;
                                                     return (
-                                                        <div key={ii} className="grid grid-cols-[140px_1fr] gap-2 text-[11px]">
+                                                        <div key={ii} className="grid grid-cols-[140px_1fr] gap-2 text-xs">
                                                             <span className="text-zinc-400 font-medium">{item.label}</span>
                                                             <span className="text-zinc-900 font-semibold">{val}</span>
                                                         </div>
@@ -760,20 +711,20 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
             </AnimatePresence>
 
             {/* ── Sidebar collapsible section ── */}
-            <div className="pt-5 border-t border-zinc-50">
-                <button onClick={() => setExpanded(e => !e)} className="w-full flex items-center justify-between group">
+            <div className="pt-2">
+                <button onClick={() => setExpanded(e => !e)} className="w-full flex items-center justify-between group p-2 rounded-xl hover:bg-zinc-50 transition-colors">
                     <div className="flex items-center gap-2">
-                        <History size={12} className="text-zinc-400 group-hover:text-blue-500 transition-colors" />
-                        <span className="text-[9px] font-bold text-zinc-300 group-hover:text-zinc-500 uppercase tracking-widest transition-colors">
+                        <History size={14} className="text-zinc-400 group-hover:text-blue-500 transition-colors" />
+                        <span className="text-[10px] font-black text-zinc-400 group-hover:text-zinc-600 uppercase tracking-[0.2em] transition-colors">
                             Previous Reports
                         </span>
                         {historyReports.length > 0 && (
-                            <span className="text-[8px] font-black text-blue-400 bg-blue-50 px-1.5 py-0.5 rounded-full">
+                            <span className="text-[9px] font-black text-blue-500 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">
                                 {historyReports.length}
                             </span>
                         )}
                     </div>
-                    <ChevronRight size={12} className={`text-zinc-300 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+                    <ChevronRight size={14} className={`text-zinc-300 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
                 </button>
 
                 <AnimatePresence>
@@ -783,9 +734,9 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
                             className="overflow-hidden"
                         >
-                            <div className="mt-3 space-y-1.5">
+                            <div className="mt-3 space-y-2">
                                 {historyReports.length === 0 ? (
-                                    <p className="text-[9px] text-zinc-300 italic px-1">No previous reports found.</p>
+                                    <p className="text-[11px] text-zinc-400 italic px-2">No previous reports found.</p>
                                 ) : historyReports.map((r: any) => {
                                     const isLoading = loadingId === r.id;
                                     return (
@@ -793,26 +744,26 @@ const HistoryReportsPanel = ({ procedures }: { procedures: any[] }) => {
                                             key={r.id}
                                             onClick={() => handleReportClick(r)}
                                             disabled={isLoading}
-                                            className="w-full text-left p-2.5 rounded-xl border border-zinc-100 hover:border-blue-100 hover:bg-blue-50/40 transition-all group flex items-center justify-between disabled:opacity-60"
+                                            className="w-full text-left p-3.5 rounded-xl border border-zinc-100 hover:border-blue-200 hover:bg-blue-50/50 hover:shadow-[0_2px_10px_rgba(59,130,246,0.1)] transition-all group flex items-center justify-between disabled:opacity-60 bg-white"
                                         >
-                                            <div className="flex flex-col gap-0.5 min-w-0">
-                                                <span className="text-[10px] font-bold text-zinc-700 truncate uppercase">
+                                            <div className="flex flex-col gap-1 min-w-0">
+                                                <span className="text-[11px] font-bold text-zinc-700 group-hover:text-blue-700 truncate uppercase tracking-wide transition-colors">
                                                     {r.type || 'Report'}
                                                 </span>
                                                 {formatDate(r.date) && (
-                                                    <span className="text-[9px] text-zinc-400 font-medium">
+                                                    <span className="text-[10px] text-zinc-400 font-medium">
                                                         {formatDate(r.date)}
                                                     </span>
                                                 )}
                                             </div>
-                                            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                            <div className="flex items-center gap-2 shrink-0 ml-2">
                                                 {r.finalized && (
-                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Finalized" />
+                                                    <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)] shrink-0" title="Finalized" />
                                                 )}
                                                 {isLoading ? (
-                                                    <Loader2 size={10} className="animate-spin text-blue-400" />
+                                                    <Loader2 size={12} className="animate-spin text-blue-500" />
                                                 ) : (
-                                                    <ChevronRight size={10} className="text-zinc-300 group-hover:text-blue-400 transition-colors" />
+                                                    <ChevronRight size={12} className="text-zinc-300 group-hover:text-blue-500 transition-colors" />
                                                 )}
                                             </div>
                                         </button>
@@ -877,6 +828,51 @@ export default function ReportPage({
     const [allProcedures, setAllProcedures] = useState<any[]>([]);
     const [showAutoFillPopup, setShowAutoFillPopup] = useState(false);
     const autoFillActionRef = useRef<'preview' | 'finalize'>('finalize');
+
+    const [footerText, setFooterText] = useState("");
+    const [footerOptions, setFooterOptions] = useState<string[]>([]);
+
+    useEffect(() => {
+        try {
+            const savedOptions: string[] = JSON.parse(localStorage.getItem('report_footer_options') || '[]');
+            const savedDefaultStr = localStorage.getItem('report_footer_default');
+            if (Array.isArray(savedOptions)) {
+                setFooterOptions(savedOptions);
+                if (savedDefaultStr !== null) {
+                    const savedDefault = parseInt(savedDefaultStr, 10);
+                    if (!isNaN(savedDefault) && savedOptions[savedDefault]) {
+                        setFooterText(savedOptions[savedDefault]);
+                    }
+                }
+            }
+        } catch (_) {}
+    }, []);
+
+    const saveFooterOption = (val: string) => {
+        if (!val.trim()) return;
+        if (!footerOptions.includes(val)) {
+            const newOpts = [...footerOptions, val];
+            setFooterOptions(newOpts);
+            localStorage.setItem('report_footer_options', JSON.stringify(newOpts));
+        }
+    };
+
+    const setDefaultFooter = (val: string) => {
+        const idx = footerOptions.indexOf(val);
+        if (idx !== -1) {
+            localStorage.setItem('report_footer_default', String(idx));
+        }
+    };
+
+    const removeFooterOption = (val: string) => {
+        const newOpts = footerOptions.filter((o) => o !== val);
+        setFooterOptions(newOpts);
+        localStorage.setItem('report_footer_options', JSON.stringify(newOpts));
+        const savedDefault = localStorage.getItem('report_footer_default');
+        if (savedDefault !== null && Number(savedDefault) >= newOpts.length) {
+            localStorage.removeItem('report_footer_default');
+        }
+    };
 
     const capturesRef = useRef(captures);
     capturesRef.current = captures;
@@ -1038,13 +1034,14 @@ export default function ReportPage({
             const allSegmentsData = assembleAllSegmentsData();
             const segmentsToSave = overrideId ? segments.filter((s: any) => s.id === overrideId) : segments;
             const results = await Promise.all(segmentsToSave.map(async (segment: any) => {
-                const targetId = segment.id, segmentData = allSegmentsData.find((s: any) => s.procedureId === targetId);
+                const targetId = segment.id;
+                const segmentData = allSegmentsData.find((s: any) => s.procedureId === targetId);
                 const reportContent = {
                     formData: formState[targetId] || {}, procedureId: targetId,
                     procedureType: segmentData?.procedureType || 'generic', segments: segmentData ? [segmentData] : [],
                     selectedImages: segmentData?.selectedImages || [], captures: segmentData?.captures || [],
                     imageCaptions: captionsMap[targetId] || {}, equipment: segmentData?.equipment || [],
-                    prescriptions: prescriptions[targetId] || []
+                    prescriptions: prescriptions[targetId] || [], footerText
                 };
                 const res = await saveReport({ procedureId: targetId, content: JSON.stringify(reportContent), isFinalized: finalize });
                 return res.success;
@@ -1068,14 +1065,12 @@ export default function ReportPage({
         setFormState(prev => ({ ...prev, [procedureId]: { ...(prev[procedureId] || {}), [fieldId]: val } })); setIsDirty(true);
     };
 
-    // Check if all form fields across all segments are empty
     const isReportEmpty = useCallback(() => {
         for (const seg of segments) {
             const form = formState[seg.id] || {};
             const hasAnyValue = Object.values(form).some((v: any) => {
                 if (v == null) return false;
                 if (typeof v === 'object' && !Array.isArray(v)) {
-                    // bilateral fields: { right, left }
                     return Object.values(v).some((sv: any) => sv != null && String(sv).trim() !== '');
                 }
                 if (Array.isArray(v)) return v.length > 0;
@@ -1086,7 +1081,6 @@ export default function ReportPage({
         return true;
     }, [segments, formState]);
 
-
     useEffect(() => {
         if (!isDirty) return;
         const timer = setTimeout(() => handleSave(false), 5000);
@@ -1096,7 +1090,12 @@ export default function ReportPage({
     const handleGeneratePDF = async (action: 'download' | 'preview' | 'print') => {
         setIsLoading(true);
         try {
-            const blob = await onGeneratePDF({ patient, doctor, hospital, segments: assembleAllSegmentsData(), action: action === 'preview' ? undefined : action });
+            const blob = await onGeneratePDF({
+                patient, doctor, hospital,
+                segments: assembleAllSegmentsData(),
+                footerText,
+                action: action === 'preview' ? undefined : action
+            } as any);
             if (!blob) { setIsLoading(false); return; }
             if (action === 'print') {
                 const url = URL.createObjectURL(blob as Blob);
@@ -1114,7 +1113,6 @@ export default function ReportPage({
         finally { setIsLoading(false); }
     };
 
-    // Sign and Finalize handler — checks if report is empty first
     const handleSignAndFinalize = useCallback(() => {
         if (isReportEmpty()) {
             autoFillActionRef.current = 'finalize';
@@ -1124,7 +1122,6 @@ export default function ReportPage({
         }
     }, [isReportEmpty, handleSave, handleGeneratePDF]);
 
-    // Save and Preview handler — checks if report is empty first
     const handleSaveAndPreview = useCallback(() => {
         if (isReportEmpty()) {
             autoFillActionRef.current = 'preview';
@@ -1208,7 +1205,6 @@ export default function ReportPage({
         );
     };
 
-    // ── Auto-fill empty report popup ──
     const AutoFillEmptyModal = () => (
         <AnimatePresence>
             {showAutoFillPopup && (
@@ -1237,22 +1233,23 @@ export default function ReportPage({
                             <button onClick={() => {
                                 setShowAutoFillPopup(false);
                                 const isFinalize = autoFillActionRef.current === 'finalize';
-                                // Auto-fill normal values for ALL segments
-                                segments.forEach((seg: any) => {
-                                    const type = proceduresData[seg.id]?.type || 'generic';
-                                    const template = resolveTemplate(type);
-                                    const normalValues = getNormalValues(template ? template.id : type);
-                                    if (!template && !normalValues) return;
-                                    let newForm = { ...(formState[seg.id] || {}) };
-                                    if (normalValues) newForm = { ...newForm, ...normalValues };
-                                    template?.sections.forEach((s: any) => s.fields.forEach((f: any) => { if ((f as any).default && !newForm[f.id]) newForm[f.id] = (f as any).default; }));
-                                    setFormState(prev => ({ ...prev, [seg.id]: newForm }));
+                                // Use flushSync to force synchronous state update so
+                                // assembleAllSegmentsData() reads the new auto-filled values
+                                flushSync(() => {
+                                    segments.forEach((seg: any) => {
+                                        const type = proceduresData[seg.id]?.type || 'generic';
+                                        const template = resolveTemplate(type);
+                                        const normalValues = getNormalValues(template ? template.id : type);
+                                        if (!template && !normalValues) return;
+                                        let newForm = { ...(formState[seg.id] || {}) };
+                                        if (normalValues) newForm = { ...newForm, ...normalValues };
+                                        template?.sections.forEach((s: any) => s.fields.forEach((f: any) => { if ((f as any).default && !newForm[f.id]) newForm[f.id] = (f as any).default; }));
+                                        setFormState(prev => ({ ...prev, [seg.id]: newForm }));
+                                    });
+                                    setIsDirty(true);
                                 });
-                                setIsDirty(true);
-                                // Small delay so state settles, then save & proceed
-                                setTimeout(() => {
-                                    handleSave(isFinalize).then(() => handleGeneratePDF(isFinalize ? 'print' : 'preview'));
-                                }, 100);
+                                // Now state is committed — save and generate PDF
+                                handleSave(isFinalize).then(() => handleGeneratePDF(isFinalize ? 'print' : 'preview'));
                             }} className="h-14 rounded-2xl bg-emerald-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-emerald-500 transition-all">
                                 Yes, Auto-Fill Normal
                             </button>
@@ -1263,12 +1260,8 @@ export default function ReportPage({
         </AnimatePresence>
     );
 
-    if (isLoading) return (
-        <div className="h-screen w-full flex flex-col items-center justify-center bg-zinc-50">
-            <Loader2 className="animate-spin text-zinc-400 mb-2" />
-            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold">Initializing Editor...</p>
-        </div>
-    );
+    // No full-screen white blocking loader — render inline overlay instead
+    // (see isLoading overlay inside the main return below)
 
     const activeForm = activeTabId ? formState[activeTabId] || {} : {};
     const activeType = (activeTabId && proceduresData[activeTabId]) ? proceduresData[activeTabId].type : (segments.find((s: any) => s.id === activeTabId)?.type || 'generic');
@@ -1276,18 +1269,38 @@ export default function ReportPage({
     const activeMedia = activeTabId ? mediaCache[activeTabId] || [] : [];
     const activeSelectedIds = activeTabId ? selectedImagesMap[activeTabId] || [] : [];
 
+    // Derive the active report name for the letterhead
+    const activeReportName = !isGeneric
+        ? (resolveTemplate(activeType)?.name || 'Medical Report')
+        : null;
+
     return (
-        <div className="flex h-screen bg-[#f5f5f5] overflow-hidden">
+        <div className="flex h-screen bg-[#f5f5f5] overflow-hidden relative">
             <UnsavedChangesModal />
             <EmbeddedPDFModal />
             <AutoFillEmptyModal />
+
+            {/* Non-blocking loading overlay */}
+            {isLoading && (
+                <div className="absolute inset-0 z-[200] bg-zinc-100/80 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+                    <div className="flex flex-col items-center gap-3">
+                        <Loader2 className="animate-spin text-blue-500 w-8 h-8" />
+                        <p className="text-[11px] text-zinc-500 uppercase tracking-widest font-bold">Loading Report Data...</p>
+                    </div>
+                </div>
+            )}
 
             {/* ── A4 Canvas ── */}
             <div className="flex-1 overflow-y-auto flex flex-col items-center p-8 bg-zinc-100">
                 <div className="bg-white shadow-2xl flex flex-col shrink-0" style={{ width: '250mm', minHeight: '297mm', padding: '20mm', marginBottom: '4rem' }}>
 
-                    <Letterhead doctor={doctor} patient={patient} hospital={hospital}
-                        reportName={!isGeneric ? (resolveTemplate(activeType)?.name || "Medical Report") : null} />
+                    {/* Pass dynamic reportName — no pill in body anymore */}
+                    <Letterhead
+                        doctor={doctor}
+                        patient={patient}
+                        hospital={hospital}
+                        reportName={activeReportName}
+                    />
 
                     <div className="mt-4">
                         {isGeneric ? (
@@ -1325,13 +1338,62 @@ export default function ReportPage({
                                     {(() => {
                                         const sig = doctor?.signaturePath ? resolveImageUrl(doctor.signaturePath) : null;
                                         return (
-                                            <div className="mt-16 flex flex-col items-end pb-8">
-                                                <div className="h-16 w-48 mb-2 flex items-end justify-center border-b-[1.5px] border-zinc-300 border-dashed">
-                                                    {sig ? <img src={sig} alt="Signature" className="max-h-14 max-w-full object-contain mb-1" />
-                                                        : <span className="text-[9px] text-zinc-300 font-bold uppercase tracking-widest mb-2">Signature Placeholder</span>}
+                                            <div className="mt-16 flex items-end justify-between pb-8 border-b-0">
+                                                <div className="flex-1 max-w-[50%] flex flex-col dropdown-container text-xs">
+                                                    <span className="text-[10px] uppercase font-bold text-zinc-400 mb-1">Footer Note</span>
+                                                    <div className="relative group/footer">
+                                                        <input 
+                                                            type="text" 
+                                                            value={footerText}
+                                                            onChange={(e) => setFooterText(e.target.value)}
+                                                            onBlur={() => saveFooterOption(footerText)}
+                                                            placeholder="Type note to appear at bottom left..." 
+                                                            className="w-full bg-white border border-zinc-200 rounded-md px-3 py-2 text-[11px] focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-medium text-zinc-800 placeholder:text-zinc-300"
+                                                        />
+                                                        {footerOptions.length > 0 && (
+                                                            <div className="absolute left-0 top-full mt-1 w-full bg-white border border-zinc-200 shadow-xl rounded-md opacity-0 group-hover/footer:opacity-100 group-focus-within/footer:opacity-100 pointer-events-none group-hover/footer:pointer-events-auto group-focus-within/footer:pointer-events-auto transition-all z-10 max-h-40 overflow-y-auto">
+                                                                {footerOptions.map((opt) => (
+                                                                    <div key={opt} className="flex items-center justify-between px-3 py-2 hover:bg-zinc-50 border-b border-zinc-50 last:border-0 group/opt">
+                                                                        <button 
+                                                                            type="button" 
+                                                                            className="flex-1 text-left text-[11px] text-zinc-700 truncate"
+                                                                            onClick={() => setFooterText(opt)}
+                                                                        >
+                                                                            {opt}
+                                                                        </button>
+                                                                        <div className="flex items-center gap-1 opacity-0 group-hover/opt:opacity-100 transition-opacity">
+                                                                            <button 
+                                                                                type="button" 
+                                                                                onClick={() => setDefaultFooter(opt)} 
+                                                                                title="Set as Default" 
+                                                                                className={`p-1 rounded hover:bg-blue-100 text-blue-600 ${localStorage.getItem('report_footer_default') === String(footerOptions.indexOf(opt)) ? 'bg-blue-50 opacity-100' : ''}`}
+                                                                            >
+                                                                                <Check size={12} />
+                                                                            </button>
+                                                                            <button 
+                                                                                type="button" 
+                                                                                onClick={() => removeFooterOption(opt)} 
+                                                                                title="Remove" 
+                                                                                className="p-1 rounded hover:bg-rose-100 text-rose-500"
+                                                                            >
+                                                                                <Trash2 size={12} />
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="text-[13px] font-bold text-zinc-900">{formattedDrName}{doctorDegree}</div>
-                                                <div className="text-[11px] font-medium text-zinc-500">{doctorRole}</div>
+
+                                                <div className="flex flex-col items-end">
+                                                    <div className="h-16 w-48 mb-2 flex items-end justify-center border-b-[1.5px] border-zinc-300 border-dashed">
+                                                        {sig ? <img src={sig} alt="Signature" className="max-h-14 max-w-full object-contain mb-1" />
+                                                            : <span className="text-[9px] text-zinc-300 font-bold uppercase tracking-widest mb-2">Signature Placeholder</span>}
+                                                    </div>
+                                                    <div className="text-[13px] font-bold text-zinc-900">{formattedDrName}{doctorDegree}</div>
+                                                    <div className="text-[11px] font-medium text-zinc-500">{doctorRole}</div>
+                                                </div>
                                             </div>
                                         );
                                     })()}
@@ -1356,28 +1418,27 @@ export default function ReportPage({
             </div>
 
             {/* ── Right Sidebar ── */}
-            <div className="w-72 bg-white border-l border-zinc-100 flex flex-col z-50">
+            <div className="w-72 bg-white border-l border-zinc-100 flex flex-col z-50 font-plus-jakarta">
 
-                {/* Nav buttons */}
                 <div className="p-6 border-b border-zinc-50 flex items-center gap-2">
                     {onBackToAnnotate && (
                         <button onClick={handleAnnotateClick}
-                            className="flex items-center gap-1.5 text-zinc-500 hover:text-blue-600 transition-all font-bold uppercase text-[9px] bg-zinc-50 px-2 flex-1 justify-center py-1.5 rounded-md border border-zinc-100 shadow-sm">
-                            <ArrowLeft size={12} /> Annotate
+                            className="flex items-center gap-1.5 text-zinc-500 hover:text-blue-600 transition-all font-bold uppercase text-[11px] bg-zinc-50 px-2 flex-1 justify-center py-2 rounded-lg border border-zinc-100 shadow-sm">
+                            <ArrowLeft size={14} /> Annotate
                         </button>
                     )}
                     <button onClick={handleHomeClick}
-                        className="flex items-center gap-1.5 text-zinc-500 hover:text-rose-600 transition-all font-bold uppercase text-[9px] flex-1 justify-center bg-zinc-50 px-2 py-1.5 rounded-md border border-zinc-100 shadow-sm">
-                        <Home size={12} /> Home
+                        className="flex items-center gap-1.5 text-zinc-500 hover:text-rose-600 transition-all font-bold uppercase text-[11px] flex-1 justify-center bg-zinc-50 px-2 py-2 rounded-lg border border-zinc-100 shadow-sm">
+                        <Home size={14} /> Home
                     </button>
                 </div>
 
-                <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6">
+                <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 custom-scrollbar">
 
                     {/* Procedure list */}
-                    <div className="space-y-3">
-                        <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-widest block">Procedure List</span>
-                        <div className="space-y-1">
+                    <div className="space-y-4">
+                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em] block">Procedure List</span>
+                        <div className="space-y-2">
                             {segments.map((s: any) => {
                                 const sType = proceduresData[s.id]?.type || s.type || 'generic';
                                 const template = resolveTemplate(sType);
@@ -1385,10 +1446,10 @@ export default function ReportPage({
                                 return (
                                     <button key={s.id}
                                         onClick={() => handleNavigationAttempt(() => { setActiveTabId(s.id); setActiveSegment(s.index); })}
-                                        className={`w-full text-left p-3 rounded-xl text-[10px] font-bold transition-all border ${activeTabId === s.id ? 'bg-blue-50/50 border-blue-100 text-blue-600 shadow-sm' : 'border-transparent text-zinc-400 hover:bg-zinc-50'}`}>
-                                        <div className="flex items-center gap-2">
-                                            <div className={`w-1.5 h-1.5 rounded-full ${activeTabId === s.id ? 'bg-blue-600' : 'bg-transparent'}`} />
-                                            {name}
+                                        className={`w-full text-left px-4 py-3.5 rounded-xl text-[12px] font-bold transition-all border ${activeTabId === s.id ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-[0_2px_10px_rgba(59,130,246,0.1)]' : 'border-zinc-100 text-zinc-500 hover:bg-zinc-50 hover:border-zinc-200 hover:text-zinc-700 shadow-sm'}`}>
+                                        <div className="flex items-center gap-3 relative">
+                                            <div className={`w-2 h-2 rounded-full transition-colors ${activeTabId === s.id ? 'bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.4)]' : 'bg-zinc-300'}`} />
+                                            <span className="truncate">{name.toUpperCase()}</span>
                                         </div>
                                     </button>
                                 );
@@ -1397,24 +1458,24 @@ export default function ReportPage({
                     </div>
 
                     {/* Report actions */}
-                    <div className="border-t border-zinc-50 pt-4 space-y-3">
-                        <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-widest block">Report Actions</span>
+                    <div className="border-t border-zinc-100 pt-6 space-y-4">
+                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em] block">Report Actions</span>
                         <button onClick={handleAutoFill} disabled={isGeneric}
-                            className="w-full py-3.5 bg-blue-50 text-blue-600 rounded-xl font-bold text-xs hover:bg-blue-100 transition-all flex items-center justify-center gap-2 border border-blue-100 disabled:opacity-50 disabled:grayscale">
-                            <Wand2 size={14} /> Auto-Fill Normal
+                            className="w-full py-4 bg-blue-50 text-blue-600 rounded-xl font-bold text-[13px] hover:bg-blue-100 hover:text-blue-700 transition-all flex items-center justify-center gap-2 border border-blue-100 disabled:opacity-50 disabled:grayscale shadow-sm">
+                            <Wand2 size={16} /> Auto-Fill Normal
                         </button>
                         <button onClick={handleSaveAndPreview}
-                            className="w-full py-3.5 bg-blue-600 text-white rounded-xl font-bold text-xs hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2">
-                            <Eye size={14} /> Save and Preview
+                            className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-[13px] hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/30 flex items-center justify-center gap-2">
+                            <Eye size={16} /> Save and Preview
                         </button>
                         <button onClick={handleSignAndFinalize}
-                            className="w-full py-3.5 bg-zinc-900 text-white rounded-xl font-bold text-xs hover:bg-zinc-800 transition-all flex items-center justify-center gap-2">
-                            <Printer size={14} /> Sign and Finalize
+                            className="w-full py-4 bg-zinc-900 text-white rounded-xl font-bold text-[13px] hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-900/20 flex items-center justify-center gap-2">
+                            <Printer size={16} /> Sign and Finalize
                         </button>
                     </div>
 
-                    {/* Previous history reports — sits at the bottom */}
-                    <div className="mt-auto">
+                    {/* Previous history reports */}
+                    <div className="mt-auto pt-6 border-t border-zinc-100">
                         <HistoryReportsPanel procedures={allProcedures} />
                     </div>
                 </div>
@@ -1422,7 +1483,6 @@ export default function ReportPage({
         </div>
     );
 
-    // handleTypeSelect defined here to access state
     function handleTypeSelect(type: string) {
         if (!activeTabId) return;
         updateProcedureType(activeTabId, type).then(res => {

@@ -29,6 +29,7 @@ export interface ReportData {
     hospital: any;
     segments: ReportSegment[];
     action?: 'download' | 'preview' | 'print' | 'share';
+    footerText?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +281,15 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
         doc.text(drFullLine, rx, SIG_BOTTOM - 4.5, { align: 'right' });
         setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
         doc.text(drRole, rx, SIG_BOTTOM - 0.5, { align: 'right' });
+
+        // Left side Footer Text
+        if (data.footerText) {
+            setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            const footerLines = doc.splitTextToSize(data.footerText, CW - 60);
+            const lh = 3.5;
+            const yStart = SIG_BOTTOM - 0.5 - (footerLines.length - 1) * lh;
+            doc.text(footerLines, ML, yStart);
+        }
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -361,7 +371,7 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
             }
         }
 
-        // ── Zone C: Consultant Name / Role / Report Date ──
+        // ── Zone C: Report Title Pill + Report Date ──
         const repDate = new Date();
         const dateStr = repDate
             .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
@@ -369,46 +379,46 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
             + '  '
             + repDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-        // Labels (left-aligned in zone)
+        const PILL_H_HEADER = 6;
+        const pillY = y + 2;
+
+        setF(C.blueBg);
+        doc.roundedRect(ZC_X, pillY, ZC_W, PILL_H_HEADER, 1.5, 1.5, 'F');
+        setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+        const titleRaw = (seg.title || 'DIAGNOSTIC ENDOSCOPY REPORT').toUpperCase();
+        
+        let titleLine = doc.splitTextToSize(titleRaw, ZC_W - 2)[0] || titleRaw;
+        // Vertically center text in pill
+        doc.text(titleLine, ZC_X + ZC_W / 2, pillY + 4.2, { align: 'center' });
+
+        // Report Date below pill
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        const dateStrW = doc.getTextWidth(dateStr);
         setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
-        doc.text('Consultant Name:', ZC_X, y + 3.5);
-        doc.text('Report Date:', ZC_X, y + 10);
+        doc.text('Report Date: ', rx - dateStrW - 2, y + 11.5, { align: 'right' });
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text(dateStr, rx, y + 11.5, { align: 'right' });
 
-        // Values (right-aligned to page edge)
-        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        doc.text(drFullLine, rx, y + 3.5, { align: 'right' });
-
-        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
-        doc.text(drRole, rx, y + 7, { align: 'right' });
-
-        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        doc.text(dateStr, rx, y + 11, { align: 'right' });
-
-        y += R1H;
+        y += R1H + 2;
 
         // ── Thin navy divider ──
         setD(C.navy); lw(0.5);
         doc.line(ML, y, rx, y);
-        y += 1.5;
+        y += 2.5;
 
         // ════════════════════════════════════════════════════════════
         // ROW 2  — height 12 mm
-        // Left 56 %:  4 patient demographic columns
-        // Right 44 %: Blue report-title pill (same row height)
+        // Patient demographics (Full Width)
         // ════════════════════════════════════════════════════════════
         const R2H = 10;                           // row height — compact
-        const DEMO_W = Math.floor(CW * 0.56);       // ~112 mm patient cols
-        const PILL_X = ML + DEMO_W + 2;             // 2 mm gap
-        const PILL_W = rx - PILL_X;
-        const PILL_H = 7;                            // pill shorter than row — vertically centred
-        const PILL_Y = y + (R2H - PILL_H) / 2;      // centre pill within row
+        const DEMO_W = CW;                        // Full width patient cols
 
         // Patient columns
         const demoCols = [
             { label: 'MRN No', value: patient?.mrn || 'N/A' },
             { label: 'Name', value: (patient?.fullName || patient?.name || 'N/A').toUpperCase() },
             { label: 'Age/Sex', value: `${patient?.age || '--'} Yrs / ${patient?.gender || '--'}` },
-            { label: 'Ref', value: (patient?.referringDoctor || 'N/A').toUpperCase() },
+            { label: 'Ref', value: (patient?.referringDoctor || 'SELF').toUpperCase() },
         ];
         const demoColW = DEMO_W / demoCols.length;
         demoCols.forEach((col, i) => {
@@ -418,20 +428,6 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
             setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
             const truncated = doc.splitTextToSize(col.value, demoColW - 1)[0] || col.value;
             doc.text(truncated, cx, y + 8);
-        });
-
-        // Blue report-title pill — compact, vertically centred in row
-        setF(C.blueBg);
-        doc.roundedRect(PILL_X, PILL_Y, PILL_W, PILL_H, 1.5, 1.5, 'F');
-
-        setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
-        const titleRaw = (seg.title || 'DIAGNOSTIC ENDOSCOPY REPORT').toUpperCase();
-        const titleLines = doc.splitTextToSize(titleRaw, PILL_W - 5);
-        const tLineH = 3.8;
-        const tTotalH = Math.min(titleLines.length, 2) * tLineH;
-        const tStartY = PILL_Y + (PILL_H - tTotalH) / 2 + tLineH - 0.8;
-        titleLines.slice(0, 2).forEach((line: string, li: number) => {
-            doc.text(line, PILL_X + PILL_W / 2, tStartY + li * tLineH, { align: 'center' });
         });
 
         y += R2H + 5;   // 5 mm gap before body — breathing room after demographics

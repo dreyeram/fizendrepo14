@@ -18,5 +18,14 @@ export function calculateAge(dob: string | Date | null | undefined): number | un
         age--;
     }
 
+    // If age is 0 (infant), return fractional year based on months
+    if (age === 0) {
+        let months = today.getMonth() - birthDate.getMonth() + (12 * (today.getFullYear() - birthDate.getFullYear()));
+        if (today.getDate() < birthDate.getDate()) {
+            months--;
+        }
+        return Math.max(0.01, months / 12);
+    }
+
     return age;
 }

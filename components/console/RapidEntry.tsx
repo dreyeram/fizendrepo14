@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { User, Phone, Mail, MapPin, Loader2, Zap, Check, Stethoscope, FileText, AlertCircle } from "lucide-react";
+import { User, Phone, Mail, MapPin, Loader2, Zap, Check, Stethoscope, FileText, AlertCircle, X } from "lucide-react";
 import { createPatient } from "@/app/actions/auth";
 import { encodeProcedureType } from "@/types/procedureTypes";
 
@@ -251,7 +251,7 @@ export default function RapidEntry({ onSuccess }: RapidEntryProps) {
                                 <AlertCircle size={16} strokeWidth={3} />
                                 <span>{error}</span>
                                 <button onClick={() => setError('')} className="ml-2 w-6 h-6 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition-colors">
-                                    <Check size={14} strokeWidth={3} />
+                                    <X size={14} strokeWidth={3} />
                                 </button>
                             </motion.div>
                         )}

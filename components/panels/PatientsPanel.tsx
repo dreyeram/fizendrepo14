@@ -45,9 +45,9 @@ export default function PatientsPanel({ onViewPatient, onNewPatient, searchQuery
         setIsLoading(true);
         try {
             const result = await searchPatients('');
-            if (result) {
-                setPatients(result);
-                setFilteredPatients(result);
+            if (result.success && result.patients) {
+                setPatients(result.patients);
+                setFilteredPatients(result.patients);
             }
         } catch (error) {
             console.error("Failed to load patients:", error);

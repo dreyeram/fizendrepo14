@@ -7,6 +7,7 @@ const nextConfig = {
             bodySizeLimit: '100mb',
         },
     },
+    allowedDevOrigins: ['100.77.59.8', 'localhost', '192.168.137.131'],
     webpack: (config, { dev, isServer }) => {
         config.resolve.alias = {
             ...config.resolve.alias,

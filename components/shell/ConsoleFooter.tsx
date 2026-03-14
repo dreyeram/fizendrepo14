@@ -33,7 +33,7 @@ export default function ConsoleFooter({
             </div>
 
             {/* Right Side: Profile & Notifications */}
-            <div className="relative flex items-center gap-3 pr-2">
+            <div className="relative flex items-center gap-3 pr-6">
                 <SettingsDialog
                     userId={userId}
                     isOpen={isSettingsOpen}

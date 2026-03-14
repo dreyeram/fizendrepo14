@@ -8,7 +8,7 @@ import {
     FileText, ChevronUp, Layout, Home, AlertCircle, Check, Minus, Plus, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { saveMediaMetadata, getProcedureMedia, deleteMedia } from '@/app/actions/procedure';
+import { saveMediaMetadata, getProcedureMedia, softDeleteMedia, restoreMedia } from '@/app/actions/procedure';
 import { getAllTemplates as getAnatomyTemplates, type AnatomyTemplate } from '@/data/entTemplates';
 import { getAllTemplates as getReportTemplates } from '@/data/reportTemplates';
 import { getTags, createTag } from '@/app/actions/tags';
@@ -86,6 +86,7 @@ export interface Capture {
     type?: 'image' | 'video';
     category?: 'raw' | 'polyp' | 'ulcer' | 'inflammation' | 'bleeding' | 'tumor' | 'other' | 'report';
     deleted?: boolean;
+    dbMediaId?: string; // [ADDED] Consistent with lib/procedure-data.ts
     procedureId?: string; // Added to track which procedure this belongs to
     originId?: string; // ID of the original image this was edited from
     scopeShape?: string | null; // Track the scope shape used for the capture (circle/square)
@@ -171,6 +172,7 @@ export default function AdvancedImageSuite({
     const { segments, activeSegmentIndex, setActiveSegment } = useSessionStore();
     const [localCaptures, setLocalCaptures] = useState<Capture[]>(initialCaptures);
     const [isLoadingMedia, setIsLoadingMedia] = useState(false);
+    const hasRanAutoSelect = useRef(false);
 
     // Determines the effectively active segment ID (default to prop or store)
     const activeSegment = segments.find(s => s.index === activeSegmentIndex)
@@ -200,7 +202,7 @@ export default function AdvancedImageSuite({
     const [tagFontSize, setTagFontSize] = useState(24);
     const [tagIconScale, setTagIconScale] = useState(2);
     const [tagFontColor, setTagFontColor] = useState('#ffffff');
-    const [primaryToolIds, setPrimaryToolIds] = useState<string[]>(['pen', 'arrow', 'rect']);
+    const [primaryToolIds, setPrimaryToolIds] = useState<string[]>(['pen', 'arrow', 'rect', 'circle']);
 
     // --- Helpers ---
     const getCircleParams = () => {
@@ -375,8 +377,9 @@ export default function AdvancedImageSuite({
                             type: m.type as 'image' | 'video',
                             category: m.category || 'raw',
                             procedureId: seg.id,
-                            originId: m.originId || undefined,
-                            scopeShape: m.scopeShape || null
+                            dbMediaId: m.id,
+                            scopeShape: m.scopeShape || null,
+                            deleted: m.deleted
                         }));
                         allFetched = [...allFetched, ...mapped];
                     }
@@ -394,7 +397,17 @@ export default function AdvancedImageSuite({
                     return true;
                 });
                 const combined = [
-                    ...allFetched,
+                    ...allFetched.map(dbItem => {
+                        const localMatch = initialCaptures.find(p => 
+                            p.id === dbItem.id || 
+                            p.dbMediaId === dbItem.id || 
+                            (p.url && dbItem.url && p.url === dbItem.url)
+                        );
+                        return {
+                            ...dbItem,
+                            deleted: !!dbItem.deleted || !!localMatch?.deleted
+                        };
+                    }),
                     ...newLocalOnly.map(p => ({
                         ...p,
                         procedureId: p.procedureId || activeSegment?.id || procedureId
@@ -406,6 +419,23 @@ export default function AdvancedImageSuite({
                 // If no active image, set last one
                 if (!activeImageId && combined.length > 0) {
                     setActiveImageId(combined[0].id);
+                }
+
+                if (!hasRanAutoSelect.current && (!initialSelectedIds || initialSelectedIds.length === 0)) {
+                    hasRanAutoSelect.current = true;
+                    const validImages = combined.filter(c => c.type !== 'video' && !c.deleted);
+                    
+                    const annotatedImages = validImages.filter(c => c.category === 'report');
+                    const rawImages = validImages.filter(c => c.category !== 'report');
+                    
+                    const annotatedOriginIds = new Set(annotatedImages.map(c => c.originId).filter(Boolean));
+                    const eligibleRawImages = rawImages.filter(c => !annotatedOriginIds.has(c.id));
+                    
+                    const toSelect = [...annotatedImages, ...eligibleRawImages].slice(0, 4);
+                    
+                    if (toSelect.length > 0) {
+                        setSelectedForReport(new Set(toSelect.map(c => c.id)));
+                    }
                 }
 
             } catch (e) {
@@ -651,6 +681,20 @@ export default function AdvancedImageSuite({
                     if (handle?.includes('w')) { x += dx; w -= dx; }
                     if (handle?.includes('n')) { y += dy; h -= dy; }
                     updateShape(s.id, { x, y, w, h });
+                } else if (startShape.type === 'pin') {
+                    const s = startShape as PinShape;
+                    const oldSize = (s.fontSize || tagFontSize);
+                    const oldScale = (s.iconScale || tagIconScale);
+                    
+                    // Simple uniform scale based on vertical delta
+                    // Since the pin tip is at the bottom, dragging 'n' handles should scale up.
+                    let deltaScale = 1 - (dy / 200); 
+                    if (handle?.includes('s')) deltaScale = 1 + (dy / 200);
+                    
+                    const newSize = Math.max(10, Math.min(100, oldSize * deltaScale));
+                    const newScale = Math.max(0.5, Math.min(5, oldScale * deltaScale));
+                    
+                    updateShape(s.id, { fontSize: newSize, iconScale: newScale });
                 }
             }
             return;
@@ -812,7 +856,23 @@ export default function AdvancedImageSuite({
             ctx.restore();
         });
 
-        const newUrl = canvas.toDataURL("image/png");
+        let finalUrl = canvas.toDataURL("image/png");
+        const capShape = currentActiveCapture.scopeShape || 'rectangle';
+        if ((capShape === 'circle' || capShape === 'square') && canvas.width !== canvas.height) {
+            const side = Math.min(canvas.width, canvas.height);
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = side;
+            cropCanvas.height = side;
+            const cropCtx = cropCanvas.getContext('2d');
+            if (cropCtx) {
+                const sx = (canvas.width - side) / 2;
+                const sy = (canvas.height - side) / 2;
+                cropCtx.drawImage(canvas, sx, sy, side, side, 0, 0, side, side);
+                finalUrl = cropCanvas.toDataURL("image/png");
+            }
+        }
+
+        const newUrl = finalUrl;
         const targetProcedureId = currentActiveCapture.procedureId || activeSegment?.id || procedureId;
 
         const newId = `adj-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
@@ -843,9 +903,9 @@ export default function AdvancedImageSuite({
                 if (!uploadRes.ok) throw new Error('Upload failed');
                 const { filePath } = await uploadRes.json();
 
-                // 2. DELETE OLD IF OVERWRITING
+                // 2. SOFT DELETE OLD IF OVERWRITING
                 if (isEditingReportImage) {
-                    await deleteMedia(currentActiveCapture.id);
+                    await softDeleteMedia(currentActiveCapture.id);
                 }
 
                 // 3. SAVE METADATA
@@ -855,6 +915,7 @@ export default function AdvancedImageSuite({
                     filePath: filePath,
                     originId: newCapture.originId,
                     timestamp: new Date(),
+                    scopeShape: currentActiveCapture.scopeShape || undefined
                 });
 
                 if (res.success && res.mediaId) {
@@ -939,16 +1000,30 @@ export default function AdvancedImageSuite({
         return () => clearTimeout(timer);
     }, [annotations, activeImageId, isDrawing, transformAction, hasUnsavedChanges]);
 
-    const toggleDelete = (id: string, e: React.MouseEvent) => {
+    const toggleDelete = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         const item = localCaptures.find(c => c.id === id);
-        const isDeleting = !item?.deleted;
+        if (!item) return;
+        
+        const isDeleting = !item.deleted;
         const next = localCaptures.map(c => c.id === id ? { ...c, deleted: !c.deleted } : c);
         setLocalCaptures(next);
         onUpdateCaptures(next);
 
+        // Sync with DB if it has a DB ID
+        const dbId = item.dbMediaId || (item.id.length > 20 ? item.id : null);
+        if (dbId) {
+            try {
+                if (isDeleting) await softDeleteMedia(dbId);
+                else await restoreMedia(dbId);
+            } catch (err) {
+                console.error("Failed to sync delete status with DB:", err);
+            }
+        }
+
         if (isDeleting) {
             showNotification("Item moved to bin. You can recover it from the bin later.", "warning");
+            if (activeImageId === id) setActiveImageId(null);
         }
     };
 
@@ -962,11 +1037,25 @@ export default function AdvancedImageSuite({
         });
     };
 
-    const restoreCapture = (id: string, e: React.MouseEvent) => {
+    const restoreCapture = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
+        const item = localCaptures.find(c => c.id === id);
+        if (!item) return;
+
         const next = localCaptures.map(c => c.id === id ? { ...c, deleted: false } : c);
         setLocalCaptures(next);
         onUpdateCaptures(next);
+
+        // Sync with DB
+        const dbId = item.dbMediaId || (item.id.length > 20 ? item.id : null);
+        if (dbId) {
+            try {
+                await restoreMedia(dbId);
+                showNotification("Item restored successfully", "success");
+            } catch (err) {
+                console.error("Failed to restore from DB:", err);
+            }
+        }
     };
 
 
@@ -988,6 +1077,21 @@ export default function AdvancedImageSuite({
         else if ('x1' in shape) {
             bx = Math.min(shape.x1, shape.x2); by = Math.min(shape.y1, shape.y2);
             bw = Math.abs(shape.x2 - shape.x1); bh = Math.abs(shape.y2 - shape.y1);
+        } else if (shape.type === 'pin') {
+            const s = shape as PinShape;
+            const fSize = s.fontSize || tagFontSize;
+            const iScale = s.iconScale || tagIconScale;
+            const textWidth = s.text.length * (fSize * 0.6) + 20;
+            const iconWidth = 24 * (iScale * 2);
+            const textY = -(iScale * 24);
+            
+            const pillTop = textY - (fSize * 0.8);
+            const iconTop = -(iScale * 48);
+            
+            bw = Math.max(iconWidth, textWidth);
+            by = s.y + Math.min(pillTop, iconTop) - 5;
+            bh = s.y - by + 5;
+            bx = s.x - bw / 2;
         }
         if (bw < 0) { bx += bw; bw = Math.abs(bw); }
         if (bh < 0) { by += bh; bh = Math.abs(bh); }
@@ -995,7 +1099,7 @@ export default function AdvancedImageSuite({
         return (
             <g>
                 <rect x={bx} y={by} width={bw} height={bh} fill="none" stroke="#3b82f6" strokeWidth="2" strokeDasharray="6 3" pointerEvents="none" />
-                {('w' in shape) && (
+                {('w' in shape || shape.type === 'pin') && (
                     <>
                         <rect x={bx - 5} y={by - 5} width={10} height={10} fill="white" stroke="#3b82f6" strokeWidth={2} cursor="nw-resize" data-handle="nw" rx="2" />
                         <rect x={bx + bw - 5} y={by - 5} width={10} height={10} fill="white" stroke="#3b82f6" strokeWidth={2} cursor="ne-resize" data-handle="ne" rx="2" />
@@ -1012,6 +1116,127 @@ export default function AdvancedImageSuite({
             </g>
         );
     };
+
+    const StylePreview = () => {
+        const isVisible = showSettings;
+        if (!isVisible || !naturalSize) return null;
+
+        const { w, h } = naturalSize;
+        const effectiveTool = tool === 'select' ? 'pen' : tool;
+
+        // Calculate a responsive size and position based on image dimensions
+        const scaleFactor = Math.min(w, h) / 800;
+        const boxW = 220 * scaleFactor;
+        const boxH = 200 * scaleFactor;
+        
+        // Position at 5% from top/left
+        const previewX = w * 0.05;
+        const previewY = h * 0.1;
+
+        let element = null;
+        const commonProps = { 
+            stroke: color, 
+            strokeWidth: thickness * scaleFactor, 
+            opacity: opacity, 
+            fill: 'none', 
+            strokeLinecap: 'round' as const, 
+            strokeLinejoin: 'round' as const 
+        };
+
+        const drawX = previewX + (boxW * 0.2);
+        const drawY = previewY + (boxH * 0.3);
+        const drawW = boxW * 0.6;
+        const drawH = boxH * 0.5;
+
+        if (effectiveTool === 'rect') {
+            element = <rect x={drawX} y={drawY} width={drawW} height={drawH} {...commonProps} />;
+        } else if (effectiveTool === 'circle') {
+            element = <ellipse cx={drawX + drawW/2} cy={drawY + drawH/2} rx={drawW/2} ry={drawH/2} {...commonProps} />;
+        } else if (effectiveTool === 'pen') {
+            const d = `M ${drawX} ${drawY + drawH} Q ${drawX + drawW/2} ${drawY} ${drawX + drawW} ${drawY + drawH}`;
+            element = <path d={d} {...commonProps} />;
+        } else if (effectiveTool === 'arrow') {
+            element = (
+                <g opacity={opacity}>
+                    <line x1={drawX} y1={drawY + drawH/2} x2={drawX + drawW} y2={drawY + drawH/2} stroke={color} strokeWidth={thickness * scaleFactor} markerEnd="url(#arrowhead)" />
+                </g>
+            );
+        } else if (effectiveTool === 'tag') {
+            const fSize = tagFontSize * scaleFactor;
+            const iScale = tagIconScale * scaleFactor;
+            const fColor = tagFontColor;
+            const text = activeTag.label;
+            const estimatedWidth = text.length * (fSize * 0.6) + 20 * scaleFactor;
+            const textY = -(iScale * 15);
+
+            element = (
+                <g transform={`translate(${drawX + drawW/2},${drawY + drawH/2})`} opacity={opacity}>
+                    <path
+                        d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z M12 11.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
+                        fill={color}
+                        transform={`translate(-12, -24) scale(${iScale * 2})`}
+                    />
+                    <rect
+                        x={-(estimatedWidth / 2)}
+                        y={textY - (fSize * 0.8)}
+                        width={estimatedWidth}
+                        height={fSize * 1.2}
+                        rx={fSize * 0.6}
+                        fill="black"
+                        fillOpacity="0.6"
+                    />
+                    <text
+                        x="0"
+                        y={textY}
+                        textAnchor="middle"
+                        fill={fColor}
+                        fontWeight="900"
+                        fontSize={fSize}
+                        style={{
+                            textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+                            fontFamily: 'system-ui, sans-serif'
+                        }}
+                    >
+                        {text}
+                    </text>
+                </g>
+            );
+        }
+
+        return (
+            <motion.g
+                initial={{ opacity: 0, scale: 0.9, x: -20 }}
+                animate={{ opacity: 1, scale: 1, x: 0 }}
+                exit={{ opacity: 0, scale: 0.9, x: -20 }}
+                className="pointer-events-none"
+            >
+                <rect
+                    x={previewX}
+                    y={previewY}
+                    width={boxW}
+                    height={boxH}
+                    rx={24 * scaleFactor}
+                    fill="rgba(0,0,0,0.6)"
+                    stroke="rgba(255,255,255,0.2)"
+                    style={{ backdropFilter: 'blur(12px)' }}
+                />
+                <text
+                    x={previewX + (15 * scaleFactor)}
+                    y={previewY + (30 * scaleFactor)}
+                    fontSize={12 * scaleFactor}
+                    fontWeight="900"
+                    fill="rgba(255,255,255,0.6)"
+                    className="uppercase tracking-[0.2em]"
+                    style={{ fontFamily: 'system-ui, sans-serif' }}
+                >
+                    Live Preview
+                </text>
+                {element}
+            </motion.g>
+        );
+    };
+
+
 
     // --- Render ---
     return (
@@ -1033,6 +1258,11 @@ export default function AdvancedImageSuite({
                                         <img src={activeCapture.category === 'report' && activeCapture.originId ? (localCaptures.find(c => c.id === activeCapture.originId)?.url || activeCapture.url) : activeCapture.url} className="max-w-full max-h-[85vh] block object-contain pointer-events-none" draggable={false} onLoad={(e) => setNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} alt="" />
                                         <svg ref={svgRef} className="absolute inset-0 w-full h-full" style={{ pointerEvents: 'none' }} viewBox={naturalSize ? `0 0 ${naturalSize.w} ${naturalSize.h}` : undefined}>
                                             <defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill={color} /></marker></defs>
+                                            
+                                            <AnimatePresence>
+                                                <StylePreview />
+                                            </AnimatePresence>
+
                                             {getCurrentShapes().map(shape => {
                                                 let element = null;
                                                 const commonProps = { stroke: shape.color, strokeWidth: shape.thickness, opacity: shape.opacity, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -1050,11 +1280,11 @@ export default function AdvancedImageSuite({
                                                     const iScale = s.iconScale || tagIconScale;
                                                     const fColor = s.fontColor || tagFontColor;
                                                     const estimatedWidth = s.text.length * (fSize * 0.6) + 20;
-                                                    const textY = -(iScale * 30);
+                                                    const textY = -(iScale * 24);
 
-                                                    element = <g transform={`translate(${s.x},${s.y})`} opacity={shape.opacity}>
+                                                    element = <g transform={`translate(${s.x},${s.y})`} opacity={s.opacity}>
                                                         {/* Pin Icon */}
-                                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z M12 11.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill={shape.color} transform={`translate(-12, -24) scale(${iScale * 2})`} />
+                                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z M12 11.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill={s.color} transform={`translate(-12, -24) scale(${iScale * 2})`} />
 
                                                         {/* Text Background Pill */}
                                                         <rect
@@ -1415,7 +1645,7 @@ export default function AdvancedImageSuite({
                                     <tab.icon size={12} className="shrink-0" />
                                     <span className="text-[9px] font-black uppercase tracking-tighter truncate">{tab.label}</span>
                                     {count > 0 && (
-                                        <span className={`absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center text-[7px] font-bold rounded-full border border-black shadow-lg ${isActive ? 'bg-blue-600 text-white' : 'bg-zinc-700 text-zinc-300'
+                                        <span className={`absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] flex items-center justify-center text-[9px] font-bold rounded-full border border-black shadow-lg ${isActive ? 'bg-blue-600 text-white' : 'bg-zinc-700 text-zinc-300'
                                             }`}>
                                             {count}
                                         </span>
@@ -1534,25 +1764,23 @@ export default function AdvancedImageSuite({
                 {/* Header Section - Streamlined */}
                 <div className="flex items-center justify-between px-5 py-4 bg-[#050505] border-b border-white/5 shrink-0 min-h-[72px]">
                     <div className="flex flex-col">
-                        <span className="text-[11px] font-black tracking-widest uppercase leading-none text-blue-500">Session Analysis</span>
+                        <span className="text-[11px] font-black tracking-widest uppercase leading-none text-blue-500">Annotate Images</span>
                         <span className="text-[8px] font-black text-zinc-600 uppercase tracking-[0.2em] mt-1">Procedure Workflow</span>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             onClick={() => setShowSettings(true)}
-                            className="flex flex-col items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all active:scale-95 group"
+                            className="flex items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all active:scale-95 group"
                             title="Settings"
                         >
                             <Settings2 size={16} />
-                            <span className="text-[6px] font-black uppercase mt-0.5 group-hover:text-white">Settings</span>
                         </button>
                         <button
                             onClick={() => setShowHomeWarning(true)}
-                            className="flex flex-col items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-zinc-500 hover:text-white hover:bg-rose-600 hover:border-rose-400 transition-all active:scale-95 group"
+                            className="flex items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-zinc-500 hover:text-white hover:bg-rose-600 hover:border-rose-400 transition-all active:scale-95 group"
                             title="Exit Annotation Mode"
                         >
                             <X size={16} />
-                            <span className="text-[6px] font-black uppercase mt-0.5 group-hover:text-white">Exit</span>
                         </button>
                     </div>
                 </div>
@@ -1565,13 +1793,13 @@ export default function AdvancedImageSuite({
                     <div className="p-4 flex flex-col gap-4">
                         <div className="space-y-3">
                             <div className="flex items-center justify-between px-1">
-                                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Session Procedures</span>
-                                <span className="text-[8px] font-bold text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded-full uppercase">{segments.length} SESSIONS</span>
+                                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Procedures</span>
+                                <span className="text-[8px] font-bold text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded-full uppercase">{segments.length} PROCEDURES</span>
                             </div>
                             <div className="flex flex-col gap-4">
                                 {segments.map((seg) => {
                                     const selectedTemplateId = selectedReportTemplates[seg.id] || defaultTemplateId;
-                                    const sessionCaptures = localCaptures.filter(c => c.procedureId === seg.id && !c.deleted && selectedForReport.has(c.id));
+                                    const procedureCaptures = localCaptures.filter(c => c.procedureId === seg.id && !c.deleted && selectedForReport.has(c.id));
                                     const rawCount = localCaptures.filter(c => c.procedureId === seg.id && !c.deleted && !selectedForReport.has(c.id)).length;
 
                                     return (
@@ -1582,7 +1810,7 @@ export default function AdvancedImageSuite({
                                                     <span className="text-[10px] font-black text-white">Procedure Type</span>
                                                 </div>
                                                 <div className="flex flex-col items-end">
-                                                    <span className="text-[8px] font-bold text-zinc-500">{sessionCaptures.length} Selected</span>
+                                                    <span className="text-[8px] font-bold text-zinc-500">{procedureCaptures.length} Selected</span>
                                                     <span className="text-[7px] font-medium text-zinc-700">{rawCount} Raw</span>
                                                 </div>
                                             </div>
@@ -1601,7 +1829,7 @@ export default function AdvancedImageSuite({
                                                 <ChevronDown size={12} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
                                             </div>
 
-                                            {sessionCaptures.length === 0 && (
+                                            {procedureCaptures.length === 0 && (
                                                 <div className="mt-2 flex items-center gap-2 px-1">
                                                     <AlertCircle size={9} className="text-amber-500" />
                                                     <span className="text-[7px] font-bold text-amber-500/70 uppercase">No images selected</span>
@@ -1644,9 +1872,9 @@ export default function AdvancedImageSuite({
                                     : 'bg-zinc-900 text-zinc-600 border-zinc-800 cursor-not-allowed opacity-50'
                                     }`}
                             >
-                                <span>Confirm Workspace</span>
-                                <span className={`text-[8px] font-medium normal-case tracking-normal ${isReady ? 'text-white/50' : 'text-zinc-700'}`}>
-                                    {isReady ? `All ${segments.length} sessions ready` : "Select images for report"}
+                                <span>Finish Annotate</span>
+                                <span className={`text-[10px] font-medium normal-case tracking-normal ${isReady ? 'text-white/50' : 'text-zinc-700'}`}>
+                                    {isReady ? "Go to Report" : "Select images for report"}
                                 </span>
                             </button>
                         );
@@ -1748,8 +1976,8 @@ export default function AdvancedImageSuite({
                                     {/* Primary Tools Selection */}
                                     <div className="space-y-3">
                                         <div className="flex justify-between items-center">
-                                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Primary Shapes (Max 3)</span>
-                                            <span className="text-[9px] font-bold text-blue-500">{primaryToolIds.length}/3</span>
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Primary Shapes (Max 4)</span>
+                                            <span className="text-[9px] font-bold text-blue-500">{primaryToolIds.length}/4</span>
                                         </div>
                                         <div className="grid grid-cols-4 gap-2">
                                             {[
@@ -1764,12 +1992,12 @@ export default function AdvancedImageSuite({
                                                             if (isSelected) {
                                                                 setPrimaryToolIds(prev => prev.filter(p => p !== t.id));
                                                             } else {
-                                                                if (primaryToolIds.length < 3) {
+                                                                if (primaryToolIds.length < 4) {
                                                                     setPrimaryToolIds(prev => [...prev, t.id]);
                                                                 }
                                                             }
                                                         }}
-                                                        disabled={!isSelected && primaryToolIds.length >= 3}
+                                                        disabled={!isSelected && primaryToolIds.length >= 4}
                                                         className={`aspect-square rounded-xl flex items-center justify-center transition-all ${isSelected
                                                             ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
                                                             : 'bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300 disabled:opacity-20 disabled:cursor-not-allowed'
@@ -1838,25 +2066,6 @@ export default function AdvancedImageSuite({
                                                 step={0.05}
                                                 onChange={setOpacity}
                                                 displayValue={`${Math.round(opacity * 100)}%`}
-                                            />
-
-                                            <SliderField
-                                                label="Tag Font"
-                                                value={tagFontSize}
-                                                min={12}
-                                                max={64}
-                                                onChange={setTagFontSize}
-                                                unit="px"
-                                            />
-
-                                            <SliderField
-                                                label="Tag Icon"
-                                                value={tagIconScale}
-                                                min={1}
-                                                max={8}
-                                                step={0.5}
-                                                onChange={setTagIconScale}
-                                                displayValue={`${tagIconScale.toFixed(1)}x`}
                                             />
                                         </div>
                                     </div>

@@ -1,8 +1,6 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { exportPatientCSV } from "@/lib/storage/export";
-import { revalidatePath } from "next/cache";
 
 /**
  * Export selected patients to CSV on USB
@@ -36,19 +34,31 @@ export async function exportPatientsAction(patientIds: string[]) {
         const exportData = patients.map(p => ({
             mrn: p.mrn,
             fullName: p.fullName,
-            dateOfBirth: p.dateOfBirth?.toISOString().split('T')[0],
-            gender: p.gender || undefined,
-            contactInfo: typeof p.contactInfo === 'string' ? p.contactInfo : JSON.stringify(p.contactInfo)
+            dateOfBirth: p.dateOfBirth?.toISOString().split('T')[0] || '',
+            gender: p.gender || '',
+            contactInfo: typeof p.contactInfo === 'string' ? p.contactInfo : JSON.stringify(p.contactInfo || '')
         }));
 
-        // Call storage lib
-        const result = await exportPatientCSV(exportData);
+        // Build CSV string
+        const headers = ['MRN', 'Full Name', 'Date of Birth', 'Gender', 'Contact'];
+        const rows = exportData.map(p => [
+            p.mrn,
+            p.fullName,
+            p.dateOfBirth,
+            p.gender,
+            p.contactInfo,
+        ]);
 
-        if (result.success) {
-            revalidatePath('/doctor');
-        }
+        const csvContent = [
+            headers.join(','),
+            ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        ].join('\n');
 
-        return result;
+        return {
+            success: true,
+            data: csvContent,
+            fileName: `patients_export_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`
+        };
     } catch (error) {
         console.error("Export action failure:", error);
         return {

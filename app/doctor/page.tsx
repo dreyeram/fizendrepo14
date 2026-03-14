@@ -10,7 +10,6 @@ import NewPatientForm from "@/components/console/NewPatientForm";
 import PatientDetailPanel from "@/components/panels/PatientDetailPanel";
 import ReportPage from "@/components/reports/ReportPage";
 import AdvancedImageSuite from "@/components/AdvancedImageSuite";
-import ReportPreviewModal from "@/components/reports/ReportPreviewModal";
 import ImportWizardModal from "@/components/import/ImportWizardModal";
 import MediaGalleryModal from "@/components/media/MediaGalleryModal";
 // import SegmentController from "@/components/session/SegmentController"; // Removed
@@ -19,10 +18,11 @@ import { Loader2 } from "lucide-react";
 import { encodeProcedureType } from "@/types/procedureTypes";
 import { saveReport, createProcedure, getPatientDetails, updateProcedureType, endProcedure, exitProcedure } from "@/app/actions/procedure";
 import { saveReportPDF } from "@/app/actions/reports";
-import { getSeededDoctorId, getCurrentSession } from "@/app/actions/auth";
+import { getSeededDoctorId, getCurrentSession, createPatient, searchPatients } from "@/app/actions/auth";
 import { getUserProfile } from "@/app/actions/settings";
 import { useSessionStore, ProcedureSegment } from "@/lib/store/session.store";
 import { calculateAge } from "@/lib/utils";
+import { getSystemStatus } from "@/app/actions/system";
 
 const ProcedureMode = dynamic(() => import("@/components/ProcedureMode"), {
     ssr: false,
@@ -64,14 +64,15 @@ export default function DoctorPage() {
     const [activePatient, setActivePatient] = useState<Patient | null>(null);
     const [selectedPatient, setSelectedPatient] = useState<any | null>(null);
     const [reportCaptures, setReportCaptures] = useState<any[]>([]);
-    const [previewReport, setPreviewReport] = useState<any>(null);
-    const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
     const [isGalleryOpen, setIsGalleryOpen] = useState(false);
     const [galleryProcedure, setGalleryProcedure] = useState<any>(null);
     const [galleryPatient, setGalleryPatient] = useState<any>(null);
+    const [galleryInitialTab, setGalleryInitialTab] = useState<'images' | 'videos' | 'report'>('images');
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isLoadingSession, setIsLoadingSession] = useState(false);
     const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
+    const [isDirectProcedure, setIsDirectProcedure] = useState(false);
+    const [isCameraConnected, setIsCameraConnected] = useState(false);
 
     // Context States
     const [orgData, setOrgData] = useState<any>(null);
@@ -92,9 +93,24 @@ export default function DoctorPage() {
     // Edit state
     const [editingPatient, setEditingPatient] = useState<any>(null);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [queueSearchQuery, setQueueSearchQuery] = useState("");
 
     useEffect(() => {
         loadData();
+        
+        // Setup camera status polling
+        const pollCamera = async () => {
+            try {
+                const status = await getSystemStatus();
+                setIsCameraConnected(!!status.camera);
+            } catch (e) {
+                console.error("Camera poll failed:", e);
+            }
+        };
+        
+        pollCamera();
+        const interval = setInterval(pollCamera, 5000);
+        return () => clearInterval(interval);
     }, []);
 
     const loadData = async () => {
@@ -201,10 +217,44 @@ export default function DoctorPage() {
             console.error("End & Annotate error:", e);
         }
     };
+
+    const handleDirectProcedure = async () => {
+        // 0. Check camera status (though button should be disabled, extra safety)
+        if (!isCameraConnected) {
+            alert("Please connect camera to start procedure.");
+            return;
+        }
+
+        // Create a unique guest patient every time to ensure fresh GUEST MRN
+        const uniqueGuestMobile = `700${Date.now().toString().slice(-7)}`;
+        const res = await createPatient({
+            fullName: "Guest Patient",
+            gender: "Other",
+            age: 0.1, // Validation expects >= 0.01
+            mobile: uniqueGuestMobile, 
+            refId: "GUEST"
+        });
+
+        if (res.success && res.patient) {
+            setIsDirectProcedure(true);
+            handleStartProcedure(res.patient);
+        } else {
+            console.error("Initialization failed:", res.error);
+            alert("Initialization failed. Please check system logs.");
+        }
+    };
     // A. Registration Success (No Auto-Start)
     const handlePatientRegistered = async (patient: any) => {
         // Clear edit state if any
         setEditingPatient(null);
+
+        // If we were in a direct procedure and just registered the guest, go to annotate
+        if (isDirectProcedure && reportCaptures.length > 0) {
+            setIsDirectProcedure(false);
+            setMode('annotate');
+            setQueueRefreshKey(prev => prev + 1);
+            return;
+        }
 
         // Ensure no stale session lingers
         endSession();
@@ -240,6 +290,21 @@ export default function DoctorPage() {
     // C. Start Procedure (Manual "Play" Button)
     const handleStartProcedure = async (patient: any, procedureId?: string) => {
         console.log("[DoctorPage] handleStartProcedure called for patient:", patient.id, "procedureId:", procedureId);
+
+        // 0. Check camera status
+        try {
+            const status = await getSystemStatus();
+            if (!status.camera) {
+                alert("Please connect camera to start procedure.");
+                return;
+            }
+        } catch (error) {
+            console.error("Failed to check camera status:", error);
+            // Optional: allow proceed if check fails? Better to be safe.
+            alert("Camera status check failed. Please ensure camera is connected.");
+            return;
+        }
+
         // 1. Resolve doctor ID — try state, then DOCTOR-role user, then current session user
         let currentDoctorId = doctorId;
         if (!currentDoctorId) {
@@ -418,7 +483,8 @@ export default function DoctorPage() {
                     email: orgData?.contactEmail || letterheadData?.email || "",
                     logoPath: orgData?.logoPath || ""
                 },
-                segments: reportData.segments
+                segments: reportData.segments,
+                footerText: reportData.footerText
             };
 
             const { generatePDF } = await import("@/lib/ReportGenerator");
@@ -542,13 +608,30 @@ export default function DoctorPage() {
                                     }
                                     setMode('suite');
                                     setActivePatient(null);
+                                    setIsDirectProcedure(false);
                                     endSession();
                                     setQueueRefreshKey(prev => prev + 1);
                                 }}
                                 onGenerateReport={(captures) => {
+                                    if (captures.length === 0) {
+                                        setMode('suite');
+                                        setActivePatient(null);
+                                        setIsDirectProcedure(false);
+                                        endSession();
+                                        setQueueRefreshKey(prev => prev + 1);
+                                        return;
+                                    }
+
                                     setLastValidProcId(null);
                                     setReportCaptures(captures);
-                                    setMode('annotate');
+                                    
+                                    if (isDirectProcedure) {
+                                        setMode('suite');
+                                        setLayoutFocus('right');
+                                        setEditingPatient(activePatient);
+                                    } else {
+                                        setMode('annotate');
+                                    }
                                 }}
                             />
                         );
@@ -680,11 +763,12 @@ export default function DoctorPage() {
                     onFocusChange={setLayoutFocus}
                     leftPanel={
                         <PatientQueue
-                            onViewHistory={(p: any, procId: string) => {
+                            onViewHistory={(p: any, procId: string, tab?: 'images' | 'videos' | 'report') => {
                                 const proc = p.procedures?.find((x: any) => x.id === procId);
                                 if ((proc?.media && proc.media.length > 0) || proc?.report) {
                                     setGalleryProcedure(proc);
                                     setGalleryPatient(p);
+                                    setGalleryInitialTab(tab || 'images');
                                     setIsGalleryOpen(true);
                                 } else {
                                     alert("No media or report available for this specific procedure yet.");
@@ -757,9 +841,20 @@ export default function DoctorPage() {
 
                                 setMode('report');
                             }}
+                            onPreviewReport={(p: any, proc: any) => {
+                                // Instead of opening the white preview modal, open the black gallery with report tab
+                                setGalleryProcedure(proc);
+                                setGalleryPatient(p);
+                                setGalleryInitialTab('report');
+                                setIsGalleryOpen(true);
+                            }}
                             onImport={() => setIsImportModalOpen(true)}
                             onEdit={(p: any) => handleEditPatient(p)}
                             refreshKey={queueRefreshKey}
+                            onSearchChange={setQueueSearchQuery}
+                            orgLogo={orgData?.logoPath}
+                            orgData={orgData}
+                            isCameraConnected={isCameraConnected}
                         />
                     }
                     rightPanel={
@@ -771,6 +866,10 @@ export default function DoctorPage() {
                                     editingPatient={editingPatient}
                                     orgLogo={orgData?.logoPath}
                                     onCancel={handleEditCancel}
+                                    onDuplicateMobile={setQueueSearchQuery}
+                                    isMediaImported={pendingImportFiles.length > 0}
+                                    onDirectProcedure={handleDirectProcedure}
+                                    isCameraConnected={isCameraConnected}
                                 />
                             </div>
                             <ConsoleFooter
@@ -923,10 +1022,14 @@ export default function DoctorPage() {
                                     if (isRaw) {
                                         setGalleryProcedure({ id: r.procedureId || 'raw', media: rawMedia });
                                         setGalleryPatient(selectedPatient);
+                                        setGalleryInitialTab('images');
                                         setIsGalleryOpen(true);
                                     } else {
-                                        setPreviewReport(r);
-                                        setIsReportPreviewOpen(true);
+                                        // Finalized or draft report - open gallery report tab
+                                        setGalleryProcedure({ id: r.procedureId, report: r });
+                                        setGalleryPatient(selectedPatient);
+                                        setGalleryInitialTab('report');
+                                        setIsGalleryOpen(true);
                                     }
                                 }}
                                 onShareReport={async (report, patient) => {
@@ -1026,13 +1129,6 @@ export default function DoctorPage() {
                 )}
             </AnimatePresence>
 
-            <ReportPreviewModal
-                isOpen={isReportPreviewOpen}
-                onClose={() => setIsReportPreviewOpen(false)}
-                report={previewReport}
-                patient={selectedPatient || { id: 'temp', fullName: 'Patient' }}
-                organizationName={orgData?.name}
-            />
 
             <MediaGalleryModal
                 isOpen={isGalleryOpen}
@@ -1040,6 +1136,7 @@ export default function DoctorPage() {
                 procedure={galleryProcedure}
                 patient={galleryPatient}
                 organizationName={orgData?.name}
+                initialTab={galleryInitialTab}
             />
         </div>
     );

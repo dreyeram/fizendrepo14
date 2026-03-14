@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Power, Wifi, WifiOff, RefreshCw, Moon, ChevronDown, Monitor, Video, VideoOff, Battery, Zap, AlertTriangle } from 'lucide-react';
+import { Power, Wifi, WifiOff, RefreshCw, Moon, ChevronDown, Monitor, Video, VideoOff, Battery, Zap, AlertTriangle, HardDrive } from 'lucide-react';
 import { shutdownSystem, restartSystem, sleepSystem, getSystemStatus } from '@/app/actions/system';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -13,10 +13,12 @@ export function SystemStatus() {
         wifi: string | null;
         camera: boolean;
         power: 'stable' | 'warning';
+        usb: boolean;
     }>({
         wifi: null,
         camera: true,
-        power: 'stable'
+        power: 'stable',
+        usb: false
     });
     const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
@@ -26,7 +28,8 @@ export function SystemStatus() {
             setStatus({
                 wifi: data.wifi,
                 camera: data.camera,
-                power: data.power as 'stable' | 'warning'
+                power: data.power as 'stable' | 'warning',
+                usb: data.usb
             });
         } catch (error) {
             console.error("Failed to fetch system status", error);
@@ -95,13 +98,10 @@ export function SystemStatus() {
                 <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                         <div className={cn(
-                            "flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors cursor-default max-w-[120px]",
+                            "flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors cursor-default",
                             status.wifi ? "text-blue-600 hover:bg-blue-50/50" : "text-slate-300"
                         )}>
                             {status.wifi ? <Wifi size={15} strokeWidth={2.5} /> : <WifiOff size={15} strokeWidth={2.5} />}
-                            {status.wifi && (
-                                <span className="text-[10px] font-bold truncate tracking-tight">{status.wifi}</span>
-                            )}
                         </div>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
@@ -122,38 +122,26 @@ export function SystemStatus() {
                             {status.camera ? <Video size={16} strokeWidth={2.5} /> : <VideoOff size={16} strokeWidth={2.5} />}
                         </div>
                     </Tooltip.Trigger>
+                </Tooltip.Root>
+
+                {/* 2.5 USB Status */}
+                <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                        <div className={cn(
+                            "flex items-center justify-center w-8 h-8 rounded-lg transition-colors",
+                            status.usb ? "text-blue-500 hover:bg-blue-50/50" : "text-slate-300"
+                        )}>
+                            <HardDrive size={16} strokeWidth={2.5} />
+                        </div>
+                    </Tooltip.Trigger>
                     <Tooltip.Portal>
                         <Tooltip.Content className="bg-slate-900 text-white text-[10px] px-2 py-1 rounded-md z-[110]" sideOffset={5}>
-                            {status.camera ? 'Camera Linked' : 'Camera Not Detected! Check Linkage.'}
+                            {status.usb ? 'External USB Storage Detected' : 'No External Storage Found'}
                             <Tooltip.Arrow className="fill-slate-900" />
                         </Tooltip.Content>
                     </Tooltip.Portal>
                 </Tooltip.Root>
 
-                {/* 2. Power Signal */}
-                <Tooltip.Root>
-                    <Tooltip.Trigger asChild>
-                        <div className={cn(
-                            "flex items-center justify-center w-8 h-8 rounded-lg transition-colors group",
-                            status.power === 'stable' ? "text-amber-500" : "text-rose-600 bg-rose-50 animate-pulse"
-                        )}>
-                            {status.power === 'stable' ? (
-                                <>
-                                    <Zap size={13} className="text-amber-400 mr-[-1px] fill-amber-400" />
-                                    <Battery size={17} strokeWidth={2.5} />
-                                </>
-                            ) : (
-                                <AlertTriangle size={17} strokeWidth={2.5} />
-                            )}
-                        </div>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                        <Tooltip.Content className="bg-slate-900 text-white text-[10px] px-2 py-1 rounded-md z-[110]" sideOffset={5}>
-                            {status.power === 'stable' ? 'Power Supply Stable' : 'Undervoltage Detected! Check Power.'}
-                            <Tooltip.Arrow className="fill-slate-900" />
-                        </Tooltip.Content>
-                    </Tooltip.Portal>
-                </Tooltip.Root>
 
                 {/* 1. Date and Time (Extreme Corner) */}
                 <div className="flex flex-col items-end px-2 py-1 rounded-lg hover:bg-black/[0.04] transition-colors cursor-default ml-1">

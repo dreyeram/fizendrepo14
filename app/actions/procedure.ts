@@ -275,7 +275,8 @@ export async function getProcedureMedia(procedureId: string) {
                 type: frontendType as 'image' | 'video',
                 category: category as 'raw' | 'report' | 'other',
                 originId: m.originId || undefined,
-                scopeShape: m.scopeShape || undefined
+                scopeShape: m.scopeShape || undefined,
+                deleted: !!(m as any).isDeleted
             };
         });
 
@@ -323,7 +324,10 @@ export async function saveReport(data: {
         if (data.isFinalized) {
             await prisma.procedure.update({
                 where: { id: data.procedureId },
-                data: { status: 'COMPLETED' }
+                data: {
+                    status: 'COMPLETED',
+                    endTime: new Date()
+                }
             });
         }
 
@@ -551,14 +555,23 @@ export async function updateProcedureType(procedureId: string, newType: string) 
 }
 
 
-export async function deleteMedia(mediaId: string) {
+export async function softDeleteMedia(mediaId: string) {
     try {
-        await prisma.media.delete({
-            where: { id: mediaId },
-        });
+        // Use raw SQL to ensure it works even if Prisma client generation failed
+        await prisma.$executeRawUnsafe(`UPDATE Media SET isDeleted = 1 WHERE id = ?`, mediaId);
         return { success: true };
     } catch (error) {
-        console.error("Delete Media Error:", error);
-        return { success: false, error: "Failed to delete media." };
+        console.error("Soft Delete Media Error:", error);
+        return { success: false, error: "Failed to soft delete media." };
+    }
+}
+
+export async function restoreMedia(mediaId: string) {
+    try {
+        await prisma.$executeRawUnsafe(`UPDATE Media SET isDeleted = 0 WHERE id = ?`, mediaId);
+        return { success: true };
+    } catch (error) {
+        console.error("Restore Media Error:", error);
+        return { success: false, error: "Failed to restore media." };
     }
 }

@@ -1,31 +1,280 @@
+/* ============================================================
+   PREDISCAN — globals.css (Complete)
+   Import order: fonts → tokens → tailwind → base → utilities
+   ============================================================ */
+
+/* ── 1. Google Fonts — MUST be absolute first line ──────────── */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap');
+
+/* ── 2. Design tokens ────────────────────────────────────────── */
+@import "./design-tokens.css";
+
+/* ── 3. Tailwind ─────────────────────────────────────────────── */
 @import "tailwindcss";
 
+
+/* ============================================================
+   DESIGN TOKENS — @theme mapping
+   Maps token variables into Tailwind's theme system
+   ============================================================ */
+@theme inline {
+  /* Fonts */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-family-sans);
+  --font-serif: var(--font-family-serif);
+  --font-mono: var(--font-family-sans);
+  /* No monospace — tabular-nums handles digit alignment */
+
+  /* Border radius */
+  --radius-squircle-lg: 1.25rem;
+  --radius-squircle-xl: 1.75rem;
+
+  /* Motion */
+  --ease-cinematic: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Font sizes — mapped from tokens */
+  --font-size-xs: var(--font-size-xs);
+  --font-size-sm: var(--font-size-sm);
+  --font-size-base: var(--font-size-base);
+  --font-size-md: var(--font-size-md);
+  --font-size-lg: var(--font-size-lg);
+  --font-size-xl: var(--font-size-xl);
+  --font-size-2xl: var(--font-size-2xl);
+  --font-size-3xl: var(--font-size-3xl);
+
+  /* Font weights */
+  --font-weight-light: var(--font-weight-light);
+  --font-weight-regular: var(--font-weight-regular);
+  --font-weight-medium: var(--font-weight-medium);
+  --font-weight-semibold: var(--font-weight-semibold);
+
+  /* Line heights */
+  --line-height-tight: var(--line-height-tight);
+  --line-height-snug: var(--line-height-snug);
+  --line-height-base: var(--line-height-base);
+  --line-height-relaxed: var(--line-height-relaxed);
+
+  /* Letter spacing */
+  --letter-spacing-tight: var(--tracking-tight);
+  --letter-spacing-normal: var(--tracking-normal);
+  --letter-spacing-wide: var(--tracking-wide);
+  --letter-spacing-wider: var(--tracking-wider);
+
+  /* Legacy semantic size mappings (components reference these) */
+  --font-size-label-xs: var(--text-label-xs);
+  --font-size-label-sm: var(--text-label-sm);
+  --font-size-body-base: var(--text-body-base);
+  --font-size-body-lg: var(--text-body-lg);
+}
+
+
+/* ============================================================
+   CSS VARIABLES — Root (light mode defaults)
+   Aurora palette + PrediScan brand
+   ============================================================ */
 :root {
   --background: #ffffff;
   --foreground: #1d1d1f;
 
-  /* Aurora Colors - Soft, Medical tones */
+  /* Aurora mesh colors — soft, medical tones */
   --aurora-1: rgba(186, 230, 253, 0.4);
-  /* Sky */
+  /* Sky blue   */
   --aurora-2: rgba(221, 214, 254, 0.3);
-  /* Violet */
+  /* Soft violet */
   --aurora-3: rgba(255, 255, 255, 0.6);
-  /* Pure Light */
+  /* Pure light  */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', sans-serif;
 
-  --radius-squircle-lg: 1.25rem;
-  --radius-squircle-xl: 1.75rem;
-
-  /* Fluid Motion */
-  --ease-cinematic: cubic-bezier(0.32, 0.72, 0, 1);
+/* ============================================================
+   BASE RESET
+   ============================================================ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-/* Aurora Mesh Background Engine - STATIC OPTIMIZED */
+html {
+  /* Prevent iOS text size inflation on rotate */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  background: var(--background);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Tailwind selection color */
+  @apply selection:bg-blue-100 selection:text-blue-900;
+}
+
+/* Remove default focus outline — we add our own */
+:focus {
+  outline: none;
+}
+
+/* Restore accessible focus for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--color-primary-600);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect reduced motion — ALL transitions become near-instant */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+
+/* ============================================================
+   SEMANTIC TYPOGRAPHY UTILITY CLASSES
+   Used directly in .tsx files — DO NOT rename these
+   ============================================================ */
+
+/* ── Page / Modal / Section titles — DM Serif Display ──────── */
+.heading-serif {
+  font-family: var(--font-family-serif);
+  font-size: var(--font-size-xl);
+  /* 20px */
+  font-weight: var(--font-weight-regular);
+  /* Serif looks best at 400 */
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--line-height-tight);
+}
+
+/* ── Patient names / body text / row content ────────────────── */
+.body-readable {
+  font-family: var(--font-family-sans);
+  font-size: var(--text-body-base);
+  /* 16px ✅ */
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-relaxed);
+}
+
+/* ── MRN · Phone · Timestamps · Numeric data ────────────────── */
+/* FIX: --text-data, --font-variant-data, --font-features-data   */
+/* were MISSING before — caused all data columns to collapse      */
+.data-tabular {
+  font-family: var(--font-family-sans);
+  font-size: var(--text-data);
+  /* 16px ✅ */
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: var(--font-variant-data);
+  /* tabular-nums */
+  font-feature-settings: var(--font-features-data);
+  /* 'tnum' 1     */
+  letter-spacing: var(--tracking-normal);
+}
+
+/* ── Table column headers — ALL CAPS structural labels ───────── */
+/* 12px is acceptable here — not readable content, structural UI  */
+.label-uppercase {
+  font-family: var(--font-family-sans);
+  font-size: var(--text-label-xs);
+  /* 12px */
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+/* ── Registration / form labels — Title Case ─────────────────── */
+/* FIX: was ALL CAPS at 10px — now 14px Title Case               */
+.form-label-medical {
+  font-family: var(--font-family-sans);
+  font-size: var(--label-font-size);
+  /* 14px */
+  font-weight: var(--label-font-weight);
+  /* 500 medium */
+  color: var(--label-color);
+  line-height: var(--line-height-base);
+  /* NO text-transform — Title Case not all caps */
+}
+
+
+/* ============================================================
+   STATUS BADGE SYSTEM
+   Used in PatientQueue, history sub-table, procedure status
+   Always pair color with text — never color alone (a11y)
+   ============================================================ */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  /* 2px — clinical/sharp */
+  font-family: var(--font-family-sans);
+  font-size: var(--text-label-xs);
+  /* 12px */
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* Status variants */
+.status-badge--active {
+  background: var(--color-success-50);
+  color: var(--color-success-700);
+  border-color: #bbf7d0;
+}
+
+.status-badge--pending {
+  background: var(--color-warning-50);
+  color: var(--color-warning-700);
+  border-color: #fde68a;
+}
+
+.status-badge--captured {
+  background: var(--color-primary-50);
+  color: var(--color-primary-600);
+  border-color: var(--color-primary-100);
+}
+
+.status-badge--completed {
+  background: #f0fdfa;
+  color: #0f766e;
+  border-color: #99f6e4;
+}
+
+.status-badge--cancelled {
+  background: var(--color-rose-50);
+  color: var(--color-rose-600);
+  border-color: #ffe4e6;
+}
+
+.status-badge--discharged {
+  background: var(--color-slate-100);
+  color: var(--color-slate-600);
+  border-color: var(--color-slate-200);
+}
+
+.status-badge--in-progress {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+
+
+/* ============================================================
+   AURORA MESH BACKGROUND
+   Used in DashboardShell (.aurora-bg) — static, no animation
+   Animation disabled for performance (medical workstation)
+   ============================================================ */
 .aurora-bg {
   background: var(--background);
   position: relative;
@@ -34,15 +283,14 @@
 }
 
 .aurora-bg::before,
-.aurora-bg::after,
-.aurora-particle {
+.aurora-bg::after {
   content: "";
   position: absolute;
   border-radius: 50%;
   filter: blur(60px);
-  /* Reduced blur */
   z-index: -1;
-  /* Animation removed for performance */
+  /* No animation — reduces GPU load on medical workstations */
+  pointer-events: none;
 }
 
 .aurora-bg::before {
@@ -61,7 +309,14 @@
   background: var(--aurora-2);
 }
 
+/* Third aurora node — requires a child div.aurora-particle */
 .aurora-particle {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  z-index: -1;
+  pointer-events: none;
   width: 40vw;
   height: 40vw;
   top: 30%;
@@ -70,10 +325,13 @@
   opacity: 0.5;
 }
 
-/* Living Glass Classes - PERFORMANCE TUNED */
+
+/* ============================================================
+   GLASS SURFACE SYSTEM
+   Used in DashboardShell sidebar, floating panels
+   ============================================================ */
 .glass-surface {
   @apply bg-white/60 backdrop-blur-md;
-  /* Reduced from 2xl */
   box-shadow:
     0 4px 6px -1px rgba(0, 0, 0, 0.05),
     inset 0 0 0 1px rgba(255, 255, 255, 0.4);
@@ -81,7 +339,6 @@
 
 .glass-floating {
   @apply bg-white/70 backdrop-blur-md rounded-3xl shadow-xl;
-  /* Reduced from 2xl */
   box-shadow:
     0 10px 15px -3px rgba(0, 0, 0, 0.05),
     inset 0 0 0 1px rgba(255, 255, 255, 0.5);
@@ -89,15 +346,17 @@
 
 .glass-header {
   @apply bg-white/50 backdrop-blur-md;
-  /* Reduced from xl */
   box-shadow: inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
 }
 
-/* Spotlight Pill */
+
+/* ============================================================
+   SPOTLIGHT SEARCH PILL
+   Used in PatientQueue main header search
+   ============================================================ */
 .spotlight-pill {
-  @apply h-12 bg-white/70 backdrop-blur-md rounded-full px-6 flex items-center gap-3;
-  transition: all 200ms ease-out;
-  /* Faster transition */
+  @apply h-10 bg-white/70 backdrop-blur-md rounded-full px-4 flex items-center gap-3;
+  transition: all var(--duration-base) var(--ease-standard);
   box-shadow:
     0 4px 6px -1px rgba(0, 0, 0, 0.02),
     inset 0 0 0 1px rgba(255, 255, 255, 0.5);
@@ -108,12 +367,12 @@
   transform: scale(1.01);
 }
 
-/* Cinematic Transitions - DISABLED/REDUCED */
-.view-enter {
-  /* animation removed */
-}
 
-/* Utilities */
+/* ============================================================
+   SCROLLBAR STYLES
+   ============================================================ */
+
+/* Hide scrollbar — element still scrollable */
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
@@ -123,6 +382,55 @@
   scrollbar-width: none;
 }
 
+/* Thin scrollbar — used in filter dropdowns, sub-tables */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--color-slate-200);
+  border-radius: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--color-slate-300);
+}
+
+/* Global scrollbar — dark screens (ProcedureMode, Annotation) */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+/* Range input thumb — used in zoom sliders across all screens */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+
+/* ============================================================
+   BORDER RADIUS UTILITIES
+   ============================================================ */
 .squircle-lg {
   border-radius: var(--radius-squircle-lg);
 }
@@ -131,18 +439,108 @@
   border-radius: var(--radius-squircle-xl);
 }
 
-body {
-  @apply text-foreground min-h-screen selection:bg-blue-100 selection:text-blue-900;
-  font-family: var(--font-sans);
+
+/* ============================================================
+   ALERT / NOTIFICATION SEVERITY TIERS
+   4 tiers — never mix. Critical never auto-dismisses.
+   ============================================================ */
+.alert-base {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-body-base);
+  /* 16px */
+  border: 1px solid transparent;
 }
 
-/* Background Receding Logic - DISABLED */
+.alert-info {
+  background: var(--color-info-50);
+  color: #075985;
+  border-color: #bae6fd;
+}
+
+.alert-warning {
+  background: var(--color-warning-50);
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.alert-error {
+  background: var(--color-rose-50);
+  color: #9f1239;
+  border-color: #fecdd3;
+}
+
+.alert-critical {
+  background: #fff1f2;
+  color: #881337;
+  border-color: #fda4af;
+  border-left: 4px solid #e11d48;
+  /* Critical: 4px left accent */
+}
+
+
+/* ============================================================
+   PRINT STYLES — ReportPage.tsx
+   ============================================================ */
+@media print {
+
+  /* Hide everything not meant for print */
+  .no-print,
+  nav,
+  aside,
+  .sidebar,
+  button:not(.print-include),
+  [data-print="false"] {
+    display: none !important;
+  }
+
+  body {
+    font-family: var(--font-family-sans);
+    font-size: 11pt;
+    /* Print minimum — patient readability */
+    color: #000000;
+    background: white;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Ensure report letterhead prints correctly */
+  .report-letterhead {
+    page-break-inside: avoid;
+  }
+
+  /* Force page break before new sections */
+  .page-break-before {
+    page-break-before: always;
+  }
+
+  /* DM Serif Display for hospital name in print */
+  .print-org-name {
+    font-family: var(--font-family-serif);
+    font-size: 16pt;
+  }
+}
+
+
+/* ============================================================
+   LEGACY / TRANSITION STUBS
+   Commented-out features disabled for performance
+   ============================================================ */
+
+/* View transition — disabled (causes jank on slow medical PCs) */
+.view-enter {
+  /* animation: removed */
+}
+
+/* Receding background — disabled for performance */
 .receding-content {
-  /* transition: transform 0.8s var(--ease-cinematic), filter 0.8s var(--ease-cinematic), opacity 0.8s var(--ease-cinematic); */
+  /* transition: transform 0.8s var(--ease-cinematic), filter 0.8s var(--ease-cinematic), opacity 0.8s; */
 }
 
 .is-active-sheet .receding-content {
-  /* No visual change for background on sheet open to save performance */
   /* transform: scale(0.96) translateY(5px); */
   /* filter: blur(8px) brightness(0.9); */
   /* opacity: 0.8; */

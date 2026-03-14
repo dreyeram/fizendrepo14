@@ -67,3 +67,28 @@ tmp*.txt
 check_*.js
 files_list.txt
 tsc_output.txt
+
+# Backup and debug files
+*.bak
+*.tmp
+fix_*.py
+debug_*.ts
+debug_*.js
+check-db.*
+check_db.*
+check_org.*
+check_schema.*
+check-fs.*
+build-log.txt
+build.log
+ts_error*.txt
+tsc_errors.log
+typescript_errors.log
+debug_search.log
+errors.log
+output.mjpeg
+
+# WhatsApp cache
+.wwebjs_auth_test_min/
+.wwebjs_auth_test/
+.wwebjs_cache/

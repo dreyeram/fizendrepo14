@@ -286,10 +286,10 @@ export function PatientRegistrationModal({ isOpen, onClose, onSuccess }: Patient
                                     </div>
                                 </div>
 
-                                {/* Ref ID (OH) */}
+                                {/* ABHA ID */}
                                 <div>
                                     <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                                        Ref ID (OH) <span className="text-slate-400 font-normal">(Optional)</span>
+                                        ABHA ID <span className="text-slate-400 font-normal">(Optional)</span>
                                     </label>
                                     <div className="relative">
                                         <div className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center text-slate-400">
@@ -298,8 +298,8 @@ export function PatientRegistrationModal({ isOpen, onClose, onSuccess }: Patient
                                         <input
                                             type="text"
                                             value={refId}
-                                            onChange={(e) => setRefId(e.target.value)}
-                                            placeholder="Enter Reference ID"
+                                            onChange={(e) => setRefId(e.target.value.toUpperCase())}
+                                            placeholder="Eg. 12-3456-7890-1234"
                                             className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                                         />
                                     </div>

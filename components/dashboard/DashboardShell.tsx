@@ -98,15 +98,15 @@ export default function DashboardShell({
                             </div>
                         )}
                         <div className="flex flex-col">
-                            <h1 className="text-lg font-black text-slate-900 tracking-tight leading-tight">{organizationName}</h1>
-                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Medical System</p>
+                            <h1 className="heading-serif text-slate-900 leading-tight">{organizationName}</h1>
+                            <p className="label-uppercase text-slate-500">Medical System</p>
                         </div>
                     </div>
                 </div>
 
                 {/* Navigation */}
                 <nav className="flex-1 px-4 py-6 overflow-y-auto">
-                    <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Menu</p>
+                    <p className="px-4 label-uppercase text-slate-400 mb-3">Menu</p>
                     <ul className="space-y-1.5">
                         {navItems.map((item) => {
                             const Icon = item.icon;
@@ -145,7 +145,7 @@ export default function DashboardShell({
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-bold text-slate-900 truncate">{userName}</p>
-                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{roleInfo.label}</p>
+                            <p className="label-uppercase text-slate-500">{roleInfo.label}</p>
                         </div>
                     </div>
 

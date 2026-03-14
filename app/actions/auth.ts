@@ -62,6 +62,16 @@ interface CreatePatientResult {
     };
 }
 
+export interface DuplicateCheckResult {
+    exists: boolean;
+    patient?: {
+        id: string;
+        fullName: string;
+        mrn: string;
+    };
+    error?: string;
+}
+
 export interface UpdatePatientResult {
     success: boolean;
     error?: string;
@@ -317,6 +327,65 @@ export async function getCurrentSession(): Promise<AuthResult> {
 
 // --- Patient Management ---
 
+export async function getNextMRN(): Promise<{ success: boolean; mrn?: string; error?: string }> {
+    try {
+        const session = await getCurrentSession();
+        let orgId: string;
+
+        if (!session.success || !session.user) {
+            const defaultOrg = await prisma.organization.findFirst({ select: { id: true } });
+            if (!defaultOrg) return { success: false, error: "No organization found" };
+            orgId = defaultOrg.id;
+        } else {
+            orgId = session.user.orgId;
+        }
+
+        const org = await prisma.organization.findUnique({
+            where: { id: orgId },
+            select: { uhidConfig: true }
+        });
+
+        let config = { prefix: "MRN-", suffix: "", currentSerial: 1000, digits: 6 };
+        if (org?.uhidConfig) {
+            try {
+                const parsed = JSON.parse(org.uhidConfig);
+                config = { ...config, ...parsed };
+            } catch (e) { /* ignore */ }
+        }
+
+        const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
+        const mrn = `${config.prefix}${serialStr}${config.suffix}`;
+
+        return { success: true, mrn };
+    } catch (error) {
+        console.error("Get next MRN error:", error);
+        return { success: false, error: "Failed to fetch next MRN" };
+    }
+}
+
+export async function getReferringPhysicians(): Promise<{ success: boolean; physicians: string[]; error?: string }> {
+    try {
+        const patients = await prisma.patient.findMany({
+            where: {
+                referringDoctor: { not: null },
+                deletedAt: null
+            },
+            select: { referringDoctor: true },
+            distinct: ['referringDoctor']
+        });
+
+        const physicians = patients
+            .map(p => p.referringDoctor as string)
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
+
+        return { success: true, physicians };
+    } catch (error) {
+        console.error("Get referring physicians error:", error);
+        return { success: false, physicians: [], error: "Failed to fetch physicians" };
+    }
+}
+
 export async function createPatient(data: {
     fullName: string;
     age?: number;
@@ -378,8 +447,18 @@ export async function createPatient(data: {
             }
 
             // 3. Generate MRN
-            const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
-            const mrn = `${config.prefix}${serialStr}${config.suffix}`;
+            let mrn = '';
+            const isGuest = data.refId === 'GUEST';
+
+            if (isGuest) {
+                // Generate a temporary GUEST MRN - do not use serial
+                const timestamp = Date.now().toString().slice(-6);
+                const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+                mrn = `GUEST-${timestamp}${random}`;
+            } else {
+                const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
+                mrn = `${config.prefix}${serialStr}${config.suffix}`;
+            }
 
             // Check if MRN exists (sanity check, keeping random fallback just in case of collision loop? No, fail is better)
             const existing = await tx.patient.findUnique({ where: { mrn } });
@@ -387,49 +466,16 @@ export async function createPatient(data: {
                 throw new Error(`Generated MRN ${mrn} already exists. Please check UHID settings.`);
             }
 
-            // 4. Update Serial in Org (Increment)
-            // Fix: Cast uhidConfig to any to avoid TS errors until client regenerates
-            const newConfig = { ...config, currentSerial: config.currentSerial + 1 };
-            await tx.organization.update({
-                where: { id: orgId },
-                data: { uhidConfig: JSON.stringify(newConfig) }
-            });
-
-            // 5. Check for existing Patient records by Mobile or Email
-            let existingMobilePatient = null;
-            if (data.mobile) {
-                // Check both the plain mobile and the +91 prefixed mobile
-                existingMobilePatient = await tx.patient.findFirst({
-                    where: {
-                        OR: [
-                            { mobile: data.mobile },
-                            { contactInfo: { contains: data.mobile } }
-                        ]
-                    }
+            // 4. Update Serial in Org (Increment) ONLY if not a guest
+            if (!isGuest) {
+                const newConfig = { ...config, currentSerial: config.currentSerial + 1 };
+                await tx.organization.update({
+                    where: { id: orgId },
+                    data: { uhidConfig: JSON.stringify(newConfig) }
                 });
             }
 
-            if (existingMobilePatient) {
-                throw new Error(`A patient with the mobile number ${data.mobile} already exists.`);
-            }
-
-            let existingEmailPatient = null;
-            if (data.email) {
-                existingEmailPatient = await tx.patient.findFirst({
-                    where: {
-                        OR: [
-                            { email: data.email },
-                            { contactInfo: { contains: data.email } }
-                        ]
-                    }
-                });
-            }
-
-            if (existingEmailPatient) {
-                throw new Error(`A patient with the email address ${data.email} already exists.`);
-            }
-
-            // 6. Create Patient
+            // 5. Build contact info JSON
             // Build contact info JSON
             const contactInfo: Record<string, string> = {};
             if (data.mobile) contactInfo.mobile = `+91${data.mobile}`;
@@ -527,76 +573,129 @@ export async function checkMobileExists(mobile: string): Promise<{ exists: boole
     }
 }
 
-export async function searchPatients(query: string = "", limit: number = 100) {
+export async function checkEmailExists(email: string): Promise<{ exists: boolean; error?: string }> {
     try {
-        // Validate input
-        const validation = safeValidate(patientSearchSchema, { query, limit });
-        if (!validation.success) {
-            console.error("Search validation failed:", validation.errors);
-            query = "";
-            limit = 100;
-        }
-        const patients = await prisma.patient.findMany({
+        const existingEmailPatient = await prisma.patient.findFirst({
             where: {
-                deletedAt: null,
-                ...(query
-                    ? {
-                        OR: [
-                            { fullName: { contains: query } },
-                            { mrn: { contains: query } },
-                            // @ts-ignore
-                            { mobile: { contains: query } },
-                        ],
-                    }
-                    : {}),
+                OR: [
+                    // @ts-ignore
+                    { email: email.toLowerCase().trim() },
+                    { contactInfo: { contains: email.toLowerCase().trim() } }
+                ]
+            }
+        });
+
+        return { exists: !!existingEmailPatient };
+    } catch (error: any) {
+        console.error("Check email error:", error);
+        return { exists: false, error: 'Failed to verify email uniqueness' };
+    }
+}
+
+export async function checkDuplicatePatient(data: {
+    fullName: string;
+    age: number;
+    gender: string;
+    mobile: string;
+}): Promise<DuplicateCheckResult> {
+    try {
+        const existingPatient = await prisma.patient.findFirst({
+            where: {
+                fullName: data.fullName.trim(),
+                age: data.age,
+                gender: data.gender,
+                mobile: data.mobile.trim(),
+                deletedAt: null
             },
+            select: {
+                id: true,
+                fullName: true,
+                mrn: true
+            }
+        });
+
+        return {
+            exists: !!existingPatient,
+            patient: existingPatient || undefined
+        };
+    } catch (error: any) {
+        console.error("Duplicate check error:", error);
+        return { exists: false, error: 'Registry verification failed' };
+    }
+}
+
+/**
+ * Search patients by name, MRN, mobile, email, or RefId
+ * 
+ * Used for building the quick-search list in sidebars and modals
+ */
+export async function searchPatients(query: string = "", limit: number = 50) {
+    try {
+        const searchTerm = (query || "").trim();
+
+        // If query is empty, return recent patients instead of nothing
+        const where: any = {
+            deletedAt: null
+        };
+
+        if (searchTerm) {
+            where.OR = [
+                { fullName: { contains: searchTerm } },
+                { mrn: { contains: searchTerm } },
+                { mobile: { contains: searchTerm } },
+                { email: { contains: searchTerm } },
+                { refId: { contains: searchTerm } }
+            ];
+        }
+
+        const patients = await prisma.patient.findMany({
+            where,
+            orderBy: { updatedAt: 'desc' },
+            take: limit,
             include: {
                 procedures: {
                     orderBy: { createdAt: "desc" },
                     take: 10,
-                    select: {
-                        id: true,
-                        type: true,
-                        status: true,
-                        createdAt: true,
-                        updatedAt: true,
-                        report: { select: { id: true, finalized: true, content: true } },
+                    include: {
                         media: {
-                            select: { id: true, type: true, filePath: true, timestamp: true },
-                            orderBy: { timestamp: "desc" },
+                            where: { isDeleted: false },
+                            orderBy: { timestamp: "desc" }
                         },
-                    },
-                },
-            },
-            orderBy: { updatedAt: "desc" },
-            take: limit,
+                        report: { select: { id: true, finalized: true, pdfPath: true } }
+                    }
+                }
+            }
         });
 
-        // Ensure age is populated, map media filePaths to URLs, and serialize
+        // Map results to ensure consistent structure and data types
         const result = patients.map(p => ({
             ...p,
-            // @ts-ignore
             age: p.age ?? (p.dateOfBirth ? calculateAge(p.dateOfBirth) : undefined),
             procedures: p.procedures.map(proc => ({
                 ...proc,
-                media: proc.media.map(m => {
-                    const isDataUrl = m.filePath.startsWith('data:');
-                    const url = isDataUrl ? m.filePath : `/api/capture-serve?path=${encodeURIComponent(m.filePath)}`;
-                    return {
-                        id: m.id,
-                        type: m.type === 'VIDEO' ? 'video' : 'image',
-                        filePath: m.filePath,
-                        url,
-                        timestamp: m.timestamp,
-                    };
-                }),
-            })),
+                hasReport: !!proc.report,
+                hasMedia: proc.media.length > 0,
+                // Count specific media types
+                mediaStats: {
+                    images: proc.media.filter(m => m.type === 'IMAGE' || m.type === 'ANNOTATED').length,
+                    videos: proc.media.filter(m => m.type === 'VIDEO').length,
+                    reports: proc.report ? 1 : 0
+                }
+            }))
         }));
 
-        return JSON.parse(JSON.stringify(result));
-    } catch (error: any) {
-        console.error("Search patients error:", error);
-        return [];
+        // Return standardized object for all consumers
+        return {
+            success: true,
+            patients: JSON.parse(JSON.stringify(result))
+        };
+    } catch (error) {
+        console.error("Patient search failed:", error);
+        return {
+            success: false,
+            patients: [],
+            error: error instanceof Error ? error.message : "Search failed"
+        };
     }
 }
 
@@ -675,6 +774,7 @@ export async function updatePatient(id: string, data: {
     address?: string;
     referringDoctor?: string;
     refId?: string;
+    mrn?: string;
 }): Promise<UpdatePatientResult> {
     try {
         // Validate session
@@ -689,11 +789,39 @@ export async function updatePatient(id: string, data: {
             auditRole = session.user.role;
         }
 
+        const orgId = session.success && session.user ? session.user.orgId : null;
+
         // Calculate DOB if age changes
         let dateOfBirth: Date | undefined;
         if (data.age !== undefined) {
             const today = new Date();
             dateOfBirth = new Date(today.getFullYear() - data.age, 0, 1);
+        }
+
+        // If a new real MRN is being assigned, increment the serial
+        if (data.mrn && !data.mrn.startsWith('GUEST-') && orgId) {
+            await prisma.$transaction(async (tx) => {
+                const org = await tx.organization.findUnique({
+                    where: { id: orgId },
+                    select: { uhidConfig: true }
+                });
+                if (org?.uhidConfig) {
+                    try {
+                        const config = JSON.parse(org.uhidConfig);
+                        // Only increment if the provided MRN matches the expected next serial
+                        const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
+                        const nextMrn = `${config.prefix}${serialStr}${config.suffix}`;
+                        
+                        if (data.mrn === nextMrn) {
+                            const newConfig = { ...config, currentSerial: config.currentSerial + 1 };
+                            await tx.organization.update({
+                                where: { id: orgId },
+                                data: { uhidConfig: JSON.stringify(newConfig) }
+                            });
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            });
         }
 
         const patient = await prisma.patient.update({
@@ -714,6 +842,7 @@ export async function updatePatient(id: string, data: {
                 referringDoctor: data.referringDoctor,
                 // @ts-ignore
                 refId: data.refId,
+                mrn: data.mrn,
             }
         });
 

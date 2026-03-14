@@ -275,6 +275,7 @@ export async function fetchExistingMedia(
                         uploadStatus: "saved",
                         dbMediaId: m.id,
                         scopeShape: (m as any).scopeShape,
+                        deleted: m.deleted
                     });
                 }
             }

@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { UploadCloud, X, ArrowRight, CheckCircle, Search, UserPlus } from "lucide-react";
+import { UploadCloud, X, ArrowRight, CheckCircle, Search, UserPlus, AlertCircle } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
+import { getSystemStatus } from "@/app/actions/system";
+import { cn } from "@/lib/utils"; // Assuming cn utility is available or needs to be added
 
 interface ImportWizardModalProps {
     isOpen: boolean;
@@ -19,6 +21,10 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
     const [files, setFiles] = useState<File[]>([]);
     const [previews, setPreviews] = useState<{ file: File, url: string, selected: boolean }[]>([]);
 
+    // USB Status
+    const [usbConnected, setUsbConnected] = useState<boolean | null>(null);
+    const [isCheckingUsb, setIsCheckingUsb] = useState(false);
+
     // Patient Assignment State
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -28,8 +34,32 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
     // File Input Ref
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // Check USB on Mount/Open
+    useEffect(() => {
+        if (isOpen) {
+            checkUsbStatus();
+        }
+    }, [isOpen]);
+
+    const checkUsbStatus = async () => {
+        setIsCheckingUsb(true);
+        try {
+            const status = await getSystemStatus();
+            setUsbConnected(status.usb);
+        } catch (err) {
+            console.error("Failed to check USB status:", err);
+            setUsbConnected(false);
+        } finally {
+            setIsCheckingUsb(false);
+        }
+    };
+
     // --- STEP 1: FILE HANDLING ---
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!usbConnected) {
+            alert("Please connect an external USB storage device to import files.");
+            return;
+        }
         if (e.target.files && e.target.files.length > 0) {
             const newFiles = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
 
@@ -53,8 +83,12 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
     const handleSearch = async (q: string) => {
         setSearchQuery(q);
         if (q.length > 1) {
-            const results = await searchPatients(q);
-            setSearchResults(results);
+            const result = await searchPatients(q);
+            if (result.success && result.patients) {
+                setSearchResults(result.patients);
+            } else {
+                setSearchResults([]);
+            }
         } else {
             setSearchResults([]);
         }
@@ -105,14 +139,41 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
                     </button>
                 </div>
 
+                {/* USB Restriction Banner */}
+                {!usbConnected && !isCheckingUsb && usbConnected !== null && (
+                    <div className="bg-amber-50 border-b border-amber-100 px-6 py-3 flex items-center justify-between animate-in slide-in-from-top duration-300">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                <AlertCircle size={16} />
+                            </div>
+                            <div>
+                                <p className="text-xs font-bold text-amber-900 uppercase tracking-wide">USB STORAGE REQUIRED</p>
+                                <p className="text-[11px] font-medium text-amber-700">Please connect an external USB drive to import patient media.</p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={checkUsbStatus}
+                            className="px-3 py-1.5 bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest rounded-lg hover:bg-amber-700 transition-all shadow-sm shadow-amber-500/20"
+                        >
+                            Retry Check
+                        </button>
+                    </div>
+                )}
+
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
 
                     {/* STEP 1: SELECT */}
                     {step === 'select' && (
-                        <div
-                            className="h-96 border-2 border-dashed border-slate-300 rounded-2xl flex flex-col items-center justify-center gap-4 hover:border-indigo-400 hover:bg-indigo-50/10 transition-all cursor-pointer group"
-                            onClick={() => fileInputRef.current?.click()}
+                        <button
+                            onClick={() => usbConnected && fileInputRef.current?.click()}
+                            disabled={!usbConnected}
+                            className={cn(
+                                "flex flex-col items-center justify-center w-full min-h-[300px] border-2 border-dashed rounded-3xl transition-all group",
+                                usbConnected
+                                    ? "border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30 bg-slate-50/50 cursor-pointer"
+                                    : "border-slate-100 bg-slate-50 cursor-not-allowed opacity-60"
+                            )}
                         >
                             <input
                                 type="file"
@@ -122,14 +183,27 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
                                 accept="image/*"
                                 onChange={handleFileSelect}
                             />
-                            <div className="w-20 h-20 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 group-hover:scale-110 transition-transform">
+                            <div className={cn(
+                                "w-20 h-20 rounded-full flex items-center justify-center mb-6 transition-all",
+                                usbConnected ? "bg-indigo-100 text-indigo-600 group-hover:scale-110" : "bg-slate-200 text-slate-400"
+                            )}>
                                 <UploadCloud size={32} />
                             </div>
-                            <div className="text-center">
-                                <p className="text-lg font-bold text-slate-700">Click to Select Files</p>
-                                <p className="text-sm text-slate-500 max-w-sm mt-1">Select individual images or open a folder to import multiple files at once.</p>
-                            </div>
-                        </div>
+                            <h3 className="text-xl font-bold text-slate-900 mb-2">
+                                {usbConnected ? "Select Patient Media" : "USB Storage Required"}
+                            </h3>
+                            <p className="text-sm font-medium text-slate-500 max-w-xs text-center leading-relaxed">
+                                {usbConnected
+                                    ? "Select endoscopic images or clinical photos from your external storage device to begin."
+                                    : "Please connect an external USB drive to enable file selection."}
+                            </p>
+
+                            {usbConnected && (
+                                <div className="mt-8 px-6 py-2.5 bg-indigo-600 text-white text-xs font-black uppercase tracking-[0.2em] rounded-xl shadow-lg shadow-indigo-500/20 group-hover:bg-indigo-700 transition-all">
+                                    Browse Files
+                                </div>
+                            )}
+                        </button>
                     )}
 
                     {/* STEP 2: PREVIEW */}

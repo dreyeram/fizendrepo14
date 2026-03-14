@@ -39,7 +39,7 @@ const COMPRESSION = 'SLOW' as const;
 
 const PW = 210;          // A4 width  mm
 const PH = 297;          // A4 height mm
-const ML = 5;            // left  margin — as thin as possible
+const ML = 5;            // left  margin
 const MR = 5;            // right margin
 const MT = 4;            // top   margin
 const MB = 3;            // bottom margin
@@ -94,13 +94,13 @@ const fetchToDataUrl = async (url: string): Promise<string> => {
  * circle      → PNG with circular alpha mask, transparent outside ring
  * square      → JPEG, square crop (cover-fit), no mask
  * rectangle   → JPEG, preserves natural aspect ratio
- * null/undef  → treated as 'circle' for backward compat
+ * null/undef  → treated as 'rectangle'
  */
 const loadShapedImage = (url: string, scopeShape?: string | null): Promise<LoadedImg> =>
     new Promise(async (resolve) => {
         if (!url) { resolve({ base64: '', w: 0, h: 0, error: 'no-url' }); return; }
 
-        const shape = scopeShape || 'circle';
+        const shape = scopeShape || 'rectangle';
 
         try {
             const dataUrl = await fetchToDataUrl(url);
@@ -123,16 +123,13 @@ const loadShapedImage = (url: string, scopeShape?: string | null): Promise<Loade
                     cv.height = side;
                     const ctx = cv.getContext('2d', { willReadFrequently: true })!;
 
-                    // CRITICAL: do NOT fill background — keep fully transparent
                     ctx.clearRect(0, 0, side, side);
 
-                    // Clip to circle
                     ctx.beginPath();
                     ctx.arc(side / 2, side / 2, side / 2, 0, Math.PI * 2);
                     ctx.closePath();
                     ctx.clip();
 
-                    // Draw image cover-fit centred in the square
                     const srcAsp = sw / sh;
                     let dx = 0, dy = 0, dw = side, dh = side;
                     if (srcAsp > 1) { dh = side / srcAsp; dy = (side - dh) / 2; }
@@ -154,7 +151,6 @@ const loadShapedImage = (url: string, scopeShape?: string | null): Promise<Loade
                     ctx.fillStyle = '#FFFFFF';
                     ctx.fillRect(0, 0, side, side);
 
-                    // Cover-fit: crop to fill the square
                     const srcAsp = sw / sh;
                     let sx = 0, sy = 0, sWidth = sw, sHeight = sh;
                     if (srcAsp > 1) { sWidth = sh; sx = (sw - sWidth) / 2; }
@@ -268,14 +264,22 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
         doc.text(drRole, rx, SIG_BOTTOM - 0.5, { align: 'right' });
     };
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // drawHeader
+    // • Zone C: report title pill (dynamic from seg.title) + date below
+    //   Consultant name / role REMOVED from header (footer only)
+    // • Row 2: patient info full width, 4 equal columns, no pill
+    // • Name capped at 25 chars; Ref defaults to "SELF"
+    // ─────────────────────────────────────────────────────────────────────────
     const drawHeader = async (seg: ReportSegment): Promise<number> => {
         let y = MT;
         const rx = PW - MR;
 
-        const R1H = 12;
-        const ZC_W = 64;
+        const R1H = 16; // taller to accommodate pill + date underneath
+        const ZC_W = 72; // width of Zone C
         const ZC_X = rx - ZC_W;
 
+        // ── Logo (Zone A) ──
         let logoEndX = ML + 14;
         if (hospital?.logoPath) {
             try {
@@ -301,6 +305,7 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
             logoEndX = ML + 15;
         }
 
+        // ── Zone B: Hospital name + contact ──
         const ZB_X = logoEndX;
         const ZB_W = ZC_X - ZB_X - 3;
 
@@ -320,64 +325,60 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
             if (contactLines[1]) doc.text(contactLines[1], ZB_X, y + 12.5);
         }
 
+        // ── Zone C: Report title pill + date below (replaces consultant name/role) ──
         const repDate = new Date();
         const dateStr = repDate
             .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).toUpperCase()
             + '  '
             + repDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
-        doc.text('Consultant Name:', ZC_X, y + 3.5);
-        doc.text('Report Date:', ZC_X, y + 10);
+        // Report title pill — vertically centered in upper half of R1H
+        const PILL_H_HDR = 7;
+        const PILL_Y_HDR = y + 1;
+        setF(C.blueBg);
+        doc.roundedRect(ZC_X, PILL_Y_HDR, ZC_W, PILL_H_HDR, 1.5, 1.5, 'F');
+        setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7);
+        const titleRaw = (seg.title || 'DIAGNOSTIC ENDOSCOPY REPORT').toUpperCase();
+        const titleLines = doc.splitTextToSize(titleRaw, ZC_W - 4);
+        const tLineH = 3.6;
+        const tTotalH = Math.min(titleLines.length, 2) * tLineH;
+        const tStartY = PILL_Y_HDR + (PILL_H_HDR - tTotalH) / 2 + tLineH - 0.8;
+        titleLines.slice(0, 2).forEach((line: string, li: number) => {
+            doc.text(line, ZC_X + ZC_W / 2, tStartY + li * tLineH, { align: 'center' });
+        });
 
-        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        doc.text(drFullLine, rx, y + 3.5, { align: 'right' });
-
-        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
-        doc.text(drRole, rx, y + 7, { align: 'right' });
-
-        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-        doc.text(dateStr, rx, y + 11, { align: 'right' });
+        // Date below pill
+        setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
+        doc.text('Report Date:', ZC_X, y + R1H - 0.5);
+        setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+        doc.text(dateStr, rx, y + R1H - 0.5, { align: 'right' });
 
         y += R1H;
 
+        // ── Navy divider ──
         setD(C.navy); lw(0.5);
         doc.line(ML, y, rx, y);
         y += 1.5;
 
-        const R2H = 10;
-        const DEMO_W = Math.floor(CW * 0.56);
-        const PILL_X = ML + DEMO_W + 2;
-        const PILL_W = rx - PILL_X;
-        const PILL_H = 7;
-        const PILL_Y = y + (R2H - PILL_H) / 2;
+        // ── Row 2: Patient info — full width, 4 equal columns, no pill ──
+        const R2H = 9;
 
+        // Truncate name to 25 chars; Ref falls back to "SELF"
         const demoCols = [
             { label: 'MRN No', value: patient?.mrn || 'N/A' },
-            { label: 'Name', value: (patient?.fullName || patient?.name || 'N/A').toUpperCase() },
+            { label: 'Name', value: (patient?.fullName || patient?.name || 'N/A').toUpperCase().slice(0, 25) },
             { label: 'Age/Sex', value: `${patient?.age || '--'} Yrs / ${patient?.gender || '--'}` },
-            { label: 'Ref', value: (patient?.referringDoctor || 'N/A').toUpperCase() },
+            { label: 'Ref', value: (patient?.referringDoctor || 'Self').toUpperCase() },
         ];
-        const demoColW = DEMO_W / demoCols.length;
+
+        const demoColW = CW / demoCols.length; // full width divided evenly
         demoCols.forEach((col, i) => {
             const cx = ML + i * demoColW;
             setT(C.label); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
             doc.text(col.label, cx, y + 3);
             setT(C.dark); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
-            const truncated = doc.splitTextToSize(col.value, demoColW - 1)[0] || col.value;
+            const truncated = doc.splitTextToSize(col.value, demoColW - 2)[0] || col.value;
             doc.text(truncated, cx, y + 8);
-        });
-
-        setF(C.blueBg);
-        doc.roundedRect(PILL_X, PILL_Y, PILL_W, PILL_H, 1.5, 1.5, 'F');
-        setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
-        const titleRaw = (seg.title || 'DIAGNOSTIC ENDOSCOPY REPORT').toUpperCase();
-        const titleLines = doc.splitTextToSize(titleRaw, PILL_W - 5);
-        const tLineH = 3.8;
-        const tTotalH = Math.min(titleLines.length, 2) * tLineH;
-        const tStartY = PILL_Y + (PILL_H - tTotalH) / 2 + tLineH - 0.8;
-        titleLines.slice(0, 2).forEach((line: string, li: number) => {
-            doc.text(line, PILL_X + PILL_W / 2, tStartY + li * tLineH, { align: 'center' });
         });
 
         y += R2H + 5;
@@ -418,26 +419,18 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
         const RIGHT_BOTTOM = footerTop - 1;
         const LEFT_BODY_H = LEFT_BOTTOM - bodyY;
         const RIGHT_BODY_H = RIGHT_BOTTOM - bodyY;
-        const BODY_H = LEFT_BODY_H;
 
         // ═════════════════════════════════════════════════════════════════════
         // RIGHT COLUMN — shape-aware image rendering
-        //
-        // circle    → square slot, PDF circle border drawn on top (image is already masked)
-        // square    → square slot, rounded-rect border
-        // rectangle → full column width, aspect-ratio height, plain rect border
         // ═════════════════════════════════════════════════════════════════════
         const maxImgs = Math.min(imgs.length, 6);
         const CAP_H = 5.0;
         const IMG_GAP = 2.0;
 
         if (maxImgs > 0) {
-            // Calculate slot size: fill available height equally for circle/square images.
-            // Rectangle images will be shorter (use 16:9 ratio within slot).
             const totalGaps = (maxImgs - 1) * IMG_GAP;
             const totalCaps = maxImgs * CAP_H;
             const availH = RIGHT_BODY_H - totalGaps - totalCaps;
-            // Base slot size — square fits in RIGHT_W and divided height
             const slotSize = Math.min(RIGHT_W, Math.max(10, availH / maxImgs));
             const xCenter = RIGHT_X + RIGHT_W / 2;
 
@@ -446,23 +439,20 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
                 const img = imgs[i];
                 const shape = img.scopeShape || 'circle';
 
-                // Rendered width / height for this specific shape
                 let renderW: number, renderH: number;
                 if (shape === 'rectangle') {
                     renderW = RIGHT_W;
                     renderH = Math.round(RIGHT_W * 9 / 16); // 16:9
-                    renderH = Math.min(renderH, slotSize);  // don't exceed slot height
+                    renderH = Math.min(renderH, slotSize);
                 } else {
-                    // circle and square are always square slots
                     renderW = slotSize;
                     renderH = slotSize;
                 }
 
                 const xStart = RIGHT_X + (RIGHT_W - renderW) / 2;
-                const cy = imgY + renderH / 2; // vertical centre of image
+                const cy = imgY + renderH / 2;
 
                 if (!img.base64 || img.error) {
-                    // Error placeholder — shape-matched outline
                     setF(C.errBg);
                     if (shape === 'circle') {
                         doc.circle(xCenter, cy, renderW / 2, 'F');
@@ -475,9 +465,6 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
                     setT(C.errFg); doc.setFont('helvetica', 'italic'); doc.setFontSize(6.5);
                     doc.text('No Image', xCenter, cy + 2, { align: 'center' });
                 } else {
-                    // Image is already shape-processed by loadShapedImage canvas.
-                    // For circle: base64 is PNG with alpha — jsPDF respects alpha channel.
-                    // For square/rect: base64 is JPEG.
                     const imgFmt = shape === 'circle' ? 'PNG' : 'JPEG';
                     doc.addImage(
                         img.base64, imgFmt,
@@ -485,7 +472,6 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
                         `img_${si}_${i}`, 'FAST'
                     );
 
-                    // Draw shape border on top of image
                     if (shape === 'circle') {
                         setD(C.line); lw(0.3);
                         doc.circle(xCenter, cy, renderW / 2, 'S');
@@ -498,13 +484,13 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
                     }
                 }
 
-                // Index badge — top-left corner of image
+                // Index badge
                 const bx = xStart + 0.8, by = imgY + 0.8;
                 setF(C.navy); doc.roundedRect(bx, by, 5.5, 3.8, 1, 1, 'F');
                 setT(C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
                 doc.text(`${i + 1}`, bx + 2.75, by + 3, { align: 'center' });
 
-                // Caption — centred below image
+                // Caption
                 const capTxt = img.caption ? `Fig ${i + 1}: ${img.caption}` : `Fig ${i + 1}`;
                 setT(C.muted); doc.setFont('helvetica', 'italic'); doc.setFontSize(6.5);
                 doc.text(
@@ -518,7 +504,7 @@ export const generatePDF = async (data: ReportData): Promise<Blob> => {
         }
 
         // ═════════════════════════════════════════════════════════════════════
-        // LEFT COLUMN — form sections + prescriptions (unchanged)
+        // LEFT COLUMN — form sections + prescriptions
         // ═════════════════════════════════════════════════════════════════════
         const sections = (seg.formData?.printableSections || []) as any[];
         const rxList = seg.prescriptions || [];
