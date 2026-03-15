@@ -3,6 +3,7 @@
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Layout, Video, Image as ImageIcon, AlertCircle, LogOut, ArrowRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface Capture {
     id: string;
@@ -18,6 +19,7 @@ interface ExitPreviewModalProps {
     captures: Capture[];
     patientName: string;
     duration?: string;
+    isWaiting?: boolean;
 }
 
 export default function ExitPreviewModal({
@@ -26,7 +28,8 @@ export default function ExitPreviewModal({
     onConfirm,
     captures,
     patientName,
-    duration
+    duration,
+    isWaiting
 }: ExitPreviewModalProps) {
     return (
         <AnimatePresence>
@@ -126,11 +129,26 @@ export default function ExitPreviewModal({
                                 </button>
                                 <button
                                     onClick={onConfirm}
-                                    className="flex-[2] px-6 py-4 rounded-2xl bg-emerald-600 text-white font-bold text-xs uppercase tracking-wider hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2 group"
+                                    disabled={isWaiting}
+                                    className={cn(
+                                        "flex-[2] px-6 py-4 rounded-2xl text-white font-bold text-xs uppercase tracking-wider transition-all shadow-lg flex items-center justify-center gap-2 group",
+                                        isWaiting 
+                                            ? "bg-zinc-700 cursor-not-allowed opacity-70" 
+                                            : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/20"
+                                    )}
                                 >
-                                    <LogOut size={16} />
-                                    Exit to Dashboard
-                                    <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                                    {isWaiting ? (
+                                        <>
+                                            <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                                            Saving Media...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <LogOut size={16} />
+                                            Exit to Dashboard
+                                            <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                                        </>
+                                    )}
                                 </button>
                             </div>
                         </div>

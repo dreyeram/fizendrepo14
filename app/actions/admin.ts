@@ -16,13 +16,31 @@ export async function getAdminStats() {
             totalPatients,
             totalProcedures,
             completedProcedures,
-            totalMedia
+            totalMedia,
+            recentUsers,
+            recentEquipment,
+            recentMedicines
         ] = await Promise.all([
             prisma.user.count(),
             prisma.patient.count(),
             prisma.procedure.count(),
             prisma.procedure.count({ where: { status: 'COMPLETED' } }),
-            prisma.media.count()
+            prisma.media.count(),
+            prisma.user.findMany({
+                take: 5,
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, fullName: true, role: true }
+            }),
+            prisma.equipment.findMany({
+                take: 3,
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, name: true, type: true, serialNumber: true }
+            }),
+            prisma.medicine.findMany({
+                take: 3,
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, name: true, category: true, strength: true }
+            })
         ]);
 
         // Calculate estimated revenue ($150 per completed procedure)
@@ -39,7 +57,10 @@ export async function getAdminStats() {
                 totalProcedures,
                 completedProcedures,
                 estimatedRevenue,
-                storageGB
+                storageGB,
+                recentUsers,
+                recentEquipment,
+                recentMedicines
             }
         };
     } catch (error) {
@@ -87,8 +108,8 @@ export async function createNewUser(data: {
             return { success: false, error: "Username and Full Name are required" };
         }
 
-        if (!data.password || data.password.length < 6) {
-            return { success: false, error: "Password must be at least 6 characters" };
+        if (!data.password || data.password.length < 8) {
+            return { success: false, error: "Password must be at least 8 characters" };
         }
 
         // Check if username already exists
@@ -131,9 +152,69 @@ export async function createNewUser(data: {
                 role: user.role
             }
         };
-    } catch (error) {
+    } catch (error: any) {
         console.error("createNewUser error:", error);
-        return { success: false, error: "Failed to create user" };
+        return { success: false, error: error?.message || "Failed to create user" };
+    }
+}
+
+export async function updateUser(userId: string, data: {
+    username?: string;
+    fullName?: string;
+    role?: string;
+    password?: string;
+}) {
+    try {
+        if (!userId) {
+            return { success: false, error: "User ID is required" };
+        }
+
+        const updateData: any = {};
+        if (data.username?.trim()) updateData.username = data.username.trim();
+        if (data.fullName?.trim()) updateData.fullName = data.fullName.trim();
+        if (data.role) updateData.role = data.role;
+
+        // Optionally update password if provided
+        if (data.password && data.password.trim() !== '') {
+            if (data.password.length < 6) {
+                return { success: false, error: "Password must be at least 6 characters" };
+            }
+            updateData.passwordHash = await hashPassword(data.password);
+        }
+
+        // Check if username already exists for a DIFFERENT user
+        if (updateData.username) {
+            const existing = await prisma.user.findFirst({
+                where: {
+                    username: updateData.username,
+                    id: { not: userId }
+                }
+            });
+
+            if (existing) {
+                return { success: false, error: "Username already taken by another user" };
+            }
+        }
+
+        const user = await prisma.user.update({
+            where: { id: userId },
+            data: updateData
+        });
+
+        revalidatePath('/admin');
+
+        return {
+            success: true,
+            user: {
+                id: user.id,
+                username: user.username,
+                fullName: user.fullName,
+                role: user.role
+            }
+        };
+    } catch (error) {
+        console.error("updateUser error:", error);
+        return { success: false, error: "Failed to update user" };
     }
 }
 

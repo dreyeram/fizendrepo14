@@ -53,12 +53,25 @@ export async function POST(req: NextRequest) {
         // Write to disk (async — does not block event loop)
         await fs.writeFile(filePath, buffer);
 
+        // Handle thumbnail if provided
+        let thumbnailPath = "";
+        if (body.thumbnailData) {
+            const thumbExt = "jpg"; // Usually jpg for thumbnails
+            const thumbFilename = `thumb_${timestamp}.${thumbExt}`;
+            const thumbFilePath = path.join(uploadsDir, thumbFilename);
+            const thumbBase64 = body.thumbnailData.replace(/^data:[^;]+;base64,/, "");
+            const thumbBuffer = Buffer.from(thumbBase64, "base64");
+            await fs.writeFile(thumbFilePath, thumbBuffer);
+            thumbnailPath = path.relative(process.cwd(), thumbFilePath).replace(/\\/g, "/");
+        }
+
         // Return relative path from project root for storage
         const relativePath = path.relative(process.cwd(), filePath).replace(/\\/g, "/");
 
         return NextResponse.json({
             success: true,
             filePath: relativePath,
+            thumbnailPath: thumbnailPath || undefined,
             size: buffer.length,
         });
     } catch (error: any) {

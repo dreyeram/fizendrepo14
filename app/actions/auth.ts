@@ -353,10 +353,42 @@ export async function getNextMRN(): Promise<{ success: boolean; mrn?: string; er
             } catch (e) { /* ignore */ }
         }
 
-        const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
-        const mrn = `${config.prefix}${serialStr}${config.suffix}`;
+        // --- ROBUST DYNAMIC SEARCH ---
+        // Instead of just trusting the config, find the first truly available number
+        let serial = config.currentSerial;
+        let availableMrn = '';
+        let isCollision = true;
+        let attempts = 0;
 
-        return { success: true, mrn };
+        while (isCollision && attempts < 100) {
+            const serialStr = serial.toString().padStart(config.digits, '0');
+            availableMrn = `${config.prefix}${serialStr}${config.suffix}`;
+            
+            const existing = await prisma.patient.findUnique({
+                where: { mrn: availableMrn },
+                select: { id: true }
+            });
+
+            if (!existing) {
+                isCollision = false;
+            } else {
+                serial++;
+                attempts++;
+            }
+        }
+
+        // If we found a different serial than the one in config, update config on-the-fly to stay in sync
+        if (serial !== config.currentSerial) {
+            try {
+                const newConfig = { ...config, currentSerial: serial };
+                await prisma.organization.update({
+                    where: { id: orgId },
+                    data: { uhidConfig: JSON.stringify(newConfig) }
+                });
+            } catch (e) { console.error("Failed to sync uhidConfig during getNextMRN:", e); }
+        }
+
+        return { success: true, mrn: availableMrn };
     } catch (error) {
         console.error("Get next MRN error:", error);
         return { success: false, error: "Failed to fetch next MRN" };
@@ -456,26 +488,38 @@ export async function createPatient(data: {
                 const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
                 mrn = `GUEST-${timestamp}${random}`;
             } else {
-                const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
-                mrn = `${config.prefix}${serialStr}${config.suffix}`;
-            }
+                // ATOMIC COLLISION SEARCH
+                let serial = config.currentSerial;
+                let isCollision = true;
+                let attempts = 0;
 
-            // Check if MRN exists (sanity check, keeping random fallback just in case of collision loop? No, fail is better)
-            const existing = await tx.patient.findUnique({ where: { mrn } });
-            if (existing) {
-                throw new Error(`Generated MRN ${mrn} already exists. Please check UHID settings.`);
-            }
+                while (isCollision && attempts < 100) {
+                    const serialStr = serial.toString().padStart(config.digits, '0');
+                    const candidateMrn = `${config.prefix}${serialStr}${config.suffix}`;
+                    
+                    const existing = await tx.patient.findUnique({
+                        where: { mrn: candidateMrn },
+                        select: { id: true }
+                    });
 
-            // 4. Update Serial in Org (Increment) ONLY if not a guest
-            if (!isGuest) {
-                const newConfig = { ...config, currentSerial: config.currentSerial + 1 };
+                    if (!existing) {
+                        mrn = candidateMrn;
+                        isCollision = false;
+                    } else {
+                        serial++;
+                        attempts++;
+                    }
+                }
+
+                // 4. Update Serial in Org (to next available)
+                const nextSerialForConfig = serial + 1;
+                const newConfig = { ...config, currentSerial: nextSerialForConfig };
                 await tx.organization.update({
                     where: { id: orgId },
                     data: { uhidConfig: JSON.stringify(newConfig) }
                 });
             }
 
-            // 5. Build contact info JSON
             // Build contact info JSON
             const contactInfo: Record<string, string> = {};
             if (data.mobile) contactInfo.mobile = `+91${data.mobile}`;
@@ -546,8 +590,6 @@ export async function createPatient(data: {
             error: `Patient creation failed: ${error.message || 'Unknown error'}`
         };
     } finally {
-        // Ensure cache is invalidated regardless of exact success path (if partial transaction success were possible, but here it's transaction)
-        // Revalidate all potential patient list pages
         revalidatePath('/doctor');
         revalidatePath('/assistant');
         revalidatePath('/');
@@ -629,14 +671,20 @@ export async function checkDuplicatePatient(data: {
  * 
  * Used for building the quick-search list in sidebars and modals
  */
-export async function searchPatients(query: string = "", limit: number = 50) {
+export async function searchPatients(query: string = "", limit: number = 50, doctorId?: string) {
     try {
         const searchTerm = (query || "").trim();
 
-        // If query is empty, return recent patients instead of nothing
+        // Base filter - exclude soft-deleted patients
         const where: any = {
             deletedAt: null
         };
+
+        // We do NOT filter the patient list by doctorId because patients are shared 
+        // across the organization. Any doctor should be able to select any patient 
+        // to start a new procedure.
+        // Instead, the `include.procedures` below filters the history so a doctor
+        // only sees their own past procedures.
 
         if (searchTerm) {
             where.OR = [
@@ -654,6 +702,8 @@ export async function searchPatients(query: string = "", limit: number = 50) {
             take: limit,
             include: {
                 procedures: {
+                    // Only include procedures from this doctor (if filtered)
+                    where: doctorId ? { doctorId } : undefined,
                     orderBy: { createdAt: "desc" },
                     take: 10,
                     include: {
@@ -668,11 +718,32 @@ export async function searchPatients(query: string = "", limit: number = 50) {
         });
 
         // Map results to ensure consistent structure and data types
+        // First: collect all procedure IDs and fetch their source field via raw SQL
+        // (Prisma's generated client may not know about the 'source' column)
+        const allProcIds = patients.flatMap(p => p.procedures.map(pr => pr.id));
+        let sourceMap: Record<string, string | null> = {};
+        
+        if (allProcIds.length > 0) {
+            try {
+                const placeholders = allProcIds.map(() => '?').join(',');
+                const rawSources: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT id, source FROM Procedure WHERE id IN (${placeholders})`,
+                    ...allProcIds
+                );
+                for (const row of rawSources) {
+                    sourceMap[row.id] = row.source || null;
+                }
+            } catch (e) {
+                console.error("Failed to fetch procedure sources via raw SQL:", e);
+            }
+        }
+
         const result = patients.map(p => ({
             ...p,
             age: p.age ?? (p.dateOfBirth ? calculateAge(p.dateOfBirth) : undefined),
             procedures: p.procedures.map(proc => ({
                 ...proc,
+                source: sourceMap[proc.id] || (proc as any).source || null,
                 hasReport: !!proc.report,
                 hasMedia: proc.media.length > 0,
                 // Count specific media types
@@ -798,52 +869,84 @@ export async function updatePatient(id: string, data: {
             dateOfBirth = new Date(today.getFullYear() - data.age, 0, 1);
         }
 
-        // If a new real MRN is being assigned, increment the serial
-        if (data.mrn && !data.mrn.startsWith('GUEST-') && orgId) {
-            await prisma.$transaction(async (tx) => {
+        const patient = await prisma.$transaction(async (tx) => {
+            let finalMrn = data.mrn;
+
+            // If a new real MRN is being assigned (usually during GUEST conversion)
+            if (finalMrn && !finalMrn.startsWith('GUEST-') && orgId) {
                 const org = await tx.organization.findUnique({
                     where: { id: orgId },
                     select: { uhidConfig: true }
                 });
+
                 if (org?.uhidConfig) {
                     try {
-                        const config = JSON.parse(org.uhidConfig);
-                        // Only increment if the provided MRN matches the expected next serial
-                        const serialStr = config.currentSerial.toString().padStart(config.digits, '0');
-                        const nextMrn = `${config.prefix}${serialStr}${config.suffix}`;
+                        let config = JSON.parse(org.uhidConfig);
                         
-                        if (data.mrn === nextMrn) {
-                            const newConfig = { ...config, currentSerial: config.currentSerial + 1 };
+                        // ATOMIC COLLISION PREVENTION:
+                        // Instead of just checking if data.mrn matches next serial,
+                        // we find the actual next available serial in case of fragmentation or drift.
+                        
+                        let serial = config.currentSerial;
+                        let availableMrn = '';
+                        let isCollision = true;
+                        let attempts = 0;
+
+                        while (isCollision && attempts < 100) {
+                            const serialStr = serial.toString().padStart(config.digits, '0');
+                            availableMrn = `${config.prefix}${serialStr}${config.suffix}`;
+                            
+                            const existing = await tx.patient.findUnique({
+                                where: { mrn: availableMrn },
+                                select: { id: true }
+                            });
+
+                            if (!existing || existing.id === id) {
+                                isCollision = false;
+                            } else {
+                                serial++;
+                                attempts++;
+                            }
+                        }
+
+                        finalMrn = availableMrn;
+
+                        // Update Org Serial only if we found or moved to a new one
+                        const nextSerial = serial + 1;
+                        if (nextSerial > config.currentSerial) {
+                            const newConfig = { ...config, currentSerial: nextSerial };
                             await tx.organization.update({
                                 where: { id: orgId },
                                 data: { uhidConfig: JSON.stringify(newConfig) }
                             });
                         }
-                    } catch (e) { /* ignore */ }
+                    } catch (e) {
+                        console.error("MRN reconciliation failed in update:", e);
+                    }
+                }
+            }
+
+            return await tx.patient.update({
+                where: { id },
+                data: {
+                    fullName: data.fullName,
+                    gender: data.gender,
+                    // @ts-ignore
+                    age: data.age,
+                    dateOfBirth: dateOfBirth,
+                    // @ts-ignore
+                    mobile: data.mobile,
+                    // @ts-ignore
+                    email: data.email,
+                    // @ts-ignore
+                    address: data.address,
+                    // @ts-ignore
+                    referringDoctor: data.referringDoctor,
+                    // @ts-ignore
+                    refId: data.refId,
+                    mrn: finalMrn,
                 }
             });
-        }
-
-        const patient = await prisma.patient.update({
-            where: { id },
-            data: {
-                fullName: data.fullName,
-                gender: data.gender,
-                // @ts-ignore
-                age: data.age,
-                dateOfBirth: dateOfBirth,
-                // @ts-ignore
-                mobile: data.mobile,
-                // @ts-ignore
-                email: data.email,
-                // @ts-ignore
-                address: data.address,
-                // @ts-ignore
-                referringDoctor: data.referringDoctor,
-                // @ts-ignore
-                refId: data.refId,
-                mrn: data.mrn,
-            }
         });
 
         // Audit log
@@ -863,3 +966,19 @@ export async function updatePatient(id: string, data: {
         return { success: false, error: error.message || "Failed to update patient" };
     }
 }
+
+export async function deletePatient(id: string): Promise<{ success: boolean; error?: string }> {
+    try {
+        await prisma.patient.delete({
+            where: { id }
+        });
+        
+        revalidatePath('/doctor');
+        revalidatePath('/assistant');
+        return { success: true };
+    } catch (error: any) {
+        console.error("Delete patient error:", error);
+        return { success: false, error: error.message || "Failed to delete patient" };
+    }
+}
+

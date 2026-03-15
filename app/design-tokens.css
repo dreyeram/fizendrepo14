@@ -1,9 +1,7 @@
 /* ============================================================
-   GOOGLE FONTS — DM Sans + DM Serif Display
-   DM Sans: weights 300, 400, 500, 600 + italic 400
-   DM Serif Display: regular + italic
+   GOOGLE FONTS — DM Sans + DM Serif Display + Plus Jakarta Sans
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 :root {
   /**
@@ -139,6 +137,14 @@
   /* Informational notice background                      */
   --color-info-600: #0284c7;
   /* Informational notice text/icon                       */
+
+  /* ── APPLE STYLE TOKENS ────────────────────────────────── */
+  --radius-apple: 20px;
+  --apple-bg: #F5F5F7;
+  --apple-card-bg: rgba(255, 255, 255, 0.8);
+  --apple-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+  --apple-border: 1px solid rgba(0, 0, 0, 0.05);
+  --font-family-apple: 'Plus Jakarta Sans', '-apple-system', 'BlinkMacSystemFont', sans-serif;
 
   /* ── SHADOWS & GLASS ────────────────────────────────────── */
   --shadow-premium: 0 10px 15px -3px rgba(0, 0, 0, 0.05), inset 0 0 0 1px rgba(255, 255, 255, 0.5);

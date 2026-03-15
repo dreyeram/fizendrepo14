@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import ProcedureMediaPopup from "./ProcedureMediaPopup";
 import { useNotify } from "@/lib/store/ui.store";
 import { downloadProcedureZip, downloadPatientsZip, downloadMultipleProceduresZip } from "@/lib/utils/download";
+import { SimpleTooltip, TooltipProvider } from "../ui/tooltip";
 
 interface PatientQueueProps {
     onViewHistory: (patient: any, procedureId: string) => void;
@@ -26,6 +27,7 @@ interface PatientQueueProps {
     orgLogo?: string;
     orgData?: any;
     isCameraConnected?: boolean;
+    currentUserId?: string; // NEW: filter patients by this doctor's ID
 }
 
 
@@ -37,18 +39,18 @@ const getVisitCount = (procs: any[]) => {
 };
 
 const SlideToStart = ({onComplete, disabled = false}: {onComplete: () => void; disabled?: boolean}) => {
-    const containerWidth = 110;
-    const handleSize = 28;
+    const containerWidth = 140;
+    const handleSize = 34;
     const x = useMotionValue(0);
-    const backgroundFill = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(16,185,129,0.05)", "rgba(16,185,129,0.7)"]);
+    const backgroundFill = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(22,163,74,0.03)", "rgba(22,163,74,0.8)"]);
     const fillWidth = useTransform(x, [0, containerWidth - handleSize - 8], [handleSize, containerWidth]);
-    const textColor = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(16,185,129,0.4)", "rgba(255,255,255,1)"]);
+    const textColor = useTransform(x, [0, containerWidth - handleSize - 8], ["rgba(22,163,74,0.4)", "rgba(255,255,255,1)"]);
     const [done, setDone] = useState(false);
     return (
-        <div className={cn("relative h-8 rounded-full overflow-hidden p-1 shadow-[inset_0_1px_3px_rgba(0,0,0,0.05)] bg-slate-100/50 border border-slate-200/50", disabled ? "opacity-50 pointer-events-none" : "hover:bg-slate-100")} style={{ width: containerWidth }}>
-            <motion.div className="absolute inset-y-0 left-0" style={{ width: fillWidth, background: backgroundFill, borderRadius: 20 }} />
+        <div className={cn("relative h-10 rounded-full overflow-hidden p-1 shadow-inner bg-slate-50 border border-slate-200/50", disabled ? "opacity-30 pointer-events-none" : "hover:bg-slate-100/50 transition-colors")} style={{ width: containerWidth }}>
+            <motion.div className="absolute inset-y-0 left-0" style={{ width: fillWidth, background: backgroundFill, borderRadius: 30 }} />
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <motion.span className="text-[11px] font-black tracking-[0.1em] ml-2" style={{ color: textColor }}>Start</motion.span>
+                <motion.span className="text-[10px] font-black tracking-[0.25em] uppercase ml-6 font-['Plus_Jakarta_Sans']" style={{ color: textColor }}>START</motion.span>
             </div>
             <motion.div drag="x" style={{x}} dragConstraints={{left:0,right:containerWidth-handleSize-8}} dragElastic={0} onDragEnd={(_,info)=>{
                 if (x.get() > containerWidth-handleSize-15) { 
@@ -58,14 +60,14 @@ const SlideToStart = ({onComplete, disabled = false}: {onComplete: () => void; d
                 } else { 
                     animate(x,0,{type:'spring',stiffness:500,damping:30}); 
                 }
-            }} className={cn("relative z-30 h-full aspect-square bg-emerald-600 rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing shadow-md", done && "bg-emerald-500")} whileHover={{scale:1.05}} whileTap={{scale:0.95}}>
-                {done?<Check size={14} className="text-white" strokeWidth={3}/>:<ArrowRight size={14} className="text-white" strokeWidth={3}/>}
+            }} className={cn("relative z-30 h-full aspect-square bg-green-600 rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing shadow-lg shadow-green-500/20", done && "bg-green-500")} whileHover={{scale:1.05}} whileTap={{scale:0.95}}>
+                {done?<Check size={16} className="text-white" strokeWidth={3}/>:<ArrowRight size={16} className="text-white" strokeWidth={3}/>}
             </motion.div>
         </div>
     );
 };
 
-export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onEndAndAnnotate, onImport, onEdit, refreshKey, externalSearchQuery, onSearchChange, orgLogo, orgData, isCameraConnected = false }: PatientQueueProps) {
+export default function PatientQueue({ onViewHistory, onStartProcedure, onStartAnnotate, onEditReport, onEndAndAnnotate, onImport, onEdit, refreshKey, externalSearchQuery, onSearchChange, orgLogo, orgData, isCameraConnected = false, currentUserId }: PatientQueueProps) {
     const [patients, setPatients] = useState<any[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [selectedProcIds, setSelectedProcIds] = useState<Set<string>>(new Set());
@@ -75,7 +77,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const [showFilters, setShowFilters] = useState(false);
     const [usbConnected, setUsbConnected] = useState<boolean>(false);
     const [expandedTab, setExpandedTab] = useState<'completed' | 'pending' | 'incomplete' | 'bins'>('completed');
-    const [patientCategory, setPatientCategory] = useState<'all' | 'guest' | 'imported'>('all');
+    const [patientCategory, setPatientCategory] = useState<'all' | 'guest'>('all');
     const [downloadingProcs, setDownloadingProcs] = useState<Set<string>>(new Set());
     
     const notify = useNotify();
@@ -112,9 +114,30 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     // Pagination State
     const [currentPage, setCurrentPage] = useState(1);
     const [showAll, setShowAll] = useState(false);
-    const itemsPerPage = 8; // Adjust to fit nicely
+    const [itemsPerPage, setItemsPerPage] = useState(10); // start with a safe default; recalculated below
 
+    // Ref for the scrollable table wrapper — used to compute how many rows fit
+    const tableWrapperRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
+
+    // Dynamically compute rows per page to exactly fill the available height
+    useEffect(() => {
+        const ROW_HEIGHT = 57;   // py-4 row height in px (matches actual rendered height)
+        const HEADER_HEIGHT = 49; // thead row height
+
+        const recalculate = () => {
+            const wrapper = tableWrapperRef.current;
+            if (!wrapper) return;
+            const available = wrapper.clientHeight - HEADER_HEIGHT;
+            const rows = Math.max(5, Math.floor(available / ROW_HEIGHT));
+            setItemsPerPage(rows);
+        };
+
+        const observer = new ResizeObserver(recalculate);
+        if (tableWrapperRef.current) observer.observe(tableWrapperRef.current);
+        recalculate(); // run once immediately
+        return () => observer.disconnect();
+    }, []);
 
     const checkUsbStatus = async () => {
         try {
@@ -136,14 +159,16 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const loadPatients = useCallback(async () => {
         setIsLoading(true);
         try {
-            const result = await searchPatients('');
-            if (result && result.success) setPatients(result.patients || []);
+            const result = await searchPatients('', 500, currentUserId);
+            if (result && result.success) {
+                setPatients(result.patients || []);
+            }
         } catch (error) {
             console.error("Clinical boot error:", error);
         } finally {
             setIsLoading(false);
         }
-    }, []);
+    }, [currentUserId]);
 
     const toggleSelect = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
@@ -265,11 +290,10 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
         if (patientCategory === 'all') {
             matchesCategory = p.refId !== 'GUEST';
         } else if (patientCategory === 'guest') {
-            matchesCategory = p.refId === 'GUEST';
-        } else if (patientCategory === 'imported') {
-            matchesCategory = p.procedures?.some((proc: any) => 
-                proc.type === 'External Import' || proc.source === 'External Import'
+            const hasMedia = p.procedures?.some((proc: any) => 
+                (proc.mediaStats?.images || 0) > 0 || (proc.mediaStats?.videos || 0) > 0 || (proc.mediaStats?.reports || 0) > 0
             );
+            matchesCategory = p.refId === 'GUEST' && hasMedia;
         }
 
         // Date Range Filter
@@ -391,6 +415,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     };
 
     return (
+        <TooltipProvider>
         <div className="h-full flex flex-col bg-white overflow-hidden patient-queue-root">
             {/* Main Header */}
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
@@ -408,8 +433,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                     <div className="flex items-center bg-slate-100/80 p-1 rounded-xl shrink-0">
                         {[
                             { id: 'all', label: 'All Patients', icon: Users },
-                            { id: 'guest', label: 'Guest Patients', icon: User },
-                            { id: 'imported', label: 'Imported Patients', icon: UploadCloud }
+                            { id: 'guest', label: 'Guest Patients', icon: User }
                         ].map((tab) => (
                             <button
                                 key={tab.id}
@@ -435,13 +459,13 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                     </div>
 
                     <div className="relative flex-1 max-w-lg min-w-[200px]">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
                         <input
                             type="text"
-                            placeholder="Search patients by MRN, Name, or Phone number.."
+                            placeholder="Find patients by MRN, Name, or Phone..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full h-10 pl-11 pr-4 bg-slate-50 border border-slate-200/50 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/10 focus:bg-white transition-all outline-none"
+                            className="w-full h-11 pl-12 pr-4 bg-slate-100/50 border border-slate-100 rounded-2xl text-sm font-bold text-slate-700 placeholder:text-slate-300 focus:ring-[6px] focus:ring-blue-600/5 focus:bg-white focus:border-blue-600/10 transition-all outline-none font-['Plus_Jakarta_Sans']"
                         />
                     </div>
                 </div>
@@ -468,9 +492,14 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
 
                     <button
                         onClick={handleExport}
-                        disabled={selectedIds.size === 0 || isExporting}
-                        className="p-2 bg-blue-600 text-white rounded-lg shadow-lg shadow-blue-500/10 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:shadow-none"
-                        title="Export Selected"
+                        disabled={selectedIds.size === 0 || isExporting || !usbConnected}
+                        className={cn(
+                            "p-2 rounded-lg transition-all",
+                            !usbConnected || selectedIds.size === 0 || isExporting
+                                ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                                : "bg-blue-600 text-white shadow-lg shadow-blue-500/10 hover:bg-blue-700"
+                        )}
+                        title={!usbConnected ? "Connect USB external storage to export" : "Export Selected"}
                     >
                         {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                     </button>
@@ -590,32 +619,32 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
 
             {/* Table & Pagination Wrapper */}
             <div className="bg-white rounded-[24px] border border-slate-200/70 !border-t-transparent shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex flex-col flex-1 overflow-hidden mx-6 mb-6">
-                <div className="flex-1 overflow-auto no-scrollbar relative w-full custom-scrollbar">
+                <div ref={tableWrapperRef} className="flex-1 overflow-auto no-scrollbar relative w-full custom-scrollbar">
                     <table className="w-full text-left border-collapse table-fixed">
                         <thead>
                             <tr className="bg-slate-50/80">
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[40px] px-3 py-3 border-b border-slate-200/80">
-                                    <button onClick={toggleSelectAll} className="w-4 h-4 border border-slate-300 rounded flex items-center justify-center transition-all bg-white">
-                                        {selectedIds.size === filteredPatients.length && filteredPatients.length > 0 && <CheckSquare size={11} className="text-blue-500" />}
+                                    <button onClick={toggleSelectAll} className="w-5 h-5 border-[1.5px] border-slate-200 rounded-lg flex items-center justify-center transition-all bg-white hover:border-blue-500">
+                                        {selectedIds.size === filteredPatients.length && filteredPatients.length > 0 && <CheckSquare size={13} className="text-blue-500" />}
                                     </button>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[140px] px-3 py-4 border-b border-slate-200/80">
-                                    <span className="text-[13px] font-bold text-slate-500">MRN no / 1st visit</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">MRN / 1st visit</span>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[200px] px-3 py-4 border-b border-slate-200/80">
-                                    <span className="text-[13px] font-bold text-slate-500">Patient name / ABHA ID</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">Patient name / ABHA ID</span>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[100px] px-3 py-4 border-b border-slate-200/80 text-center">
-                                    <span className="text-[13px] font-bold text-slate-500">Age / Gender</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">Age / Sex</span>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[130px] px-3 py-4 border-b border-slate-200/80">
-                                    <span className="text-[13px] font-bold text-slate-500">Mobile</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">Mobile</span>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[240px] px-4 py-4 border-b border-slate-200/80">
-                                    <span className="text-[13px] font-bold text-slate-500 tracking-tight whitespace-nowrap">Last procedure & gallery</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">Last procedure</span>
                                 </th>
                                 <th className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-30 w-[140px] px-4 py-4 border-b border-slate-200/80 text-left">
-                                    <span className="text-[13px] font-bold text-slate-500">Action</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-['Plus_Jakarta_Sans']">Action</span>
                                 </th>
                             </tr>
                         </thead>
@@ -674,91 +703,98 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                     </td>
 
                                                     {/* Stacked MRN / 1st Visit */}
-                                                    <td className="px-3 py-4">
+                                                     <td className="px-3 py-4">
                                                         <div className="flex flex-col">
-                                                            <span className="text-[15px] font-bold text-slate-800 tracking-tight">{patient.mrn}</span>
-                                                            <span className="text-[12px] text-slate-600 font-semibold leading-tight mt-0.5">
+                                                            <span className="text-[14px] font-extrabold text-slate-800 tracking-tight font-['Plus_Jakarta_Sans']">{patient.mrn}</span>
+                                                            <span className="text-[11px] text-slate-400 font-bold leading-tight mt-1 uppercase tracking-wider font-['Plus_Jakarta_Sans']">
                                                                 {patient.createdAt ? new Date(patient.createdAt).toLocaleDateString('en-GB') : 'No record'}
                                                             </span>
                                                         </div>
                                                     </td>
 
                                                     {/* Stacked Patient Name / ABHA ID */}
-                                                    <td className="px-4 py-5 group/name relative">
+                                                     <td className="px-4 py-5 group/name relative">
                                                         <div className="flex items-center gap-3 max-w-full overflow-hidden">
                                                             <div className="flex flex-col flex-1 overflow-hidden">
-                                                                <span className="text-[16px] font-bold text-slate-900 truncate capitalize leading-tight">{patient.fullName?.toLowerCase() || 'Unnamed'}</span>
+                                                                 <div className="flex items-center gap-1.5">
+                                                                    <span className="text-[15px] font-extrabold text-slate-900 truncate capitalize leading-tight font-['Plus_Jakarta_Sans']">
+                                                                        {patient.fullName?.toLowerCase() || 'Unnamed'}
+                                                                    </span>
+                                                                    {/* Show icon near name ONLY if ALL procedures are imported (whole patient was imported) */}
+                                                                    {(() => {
+                                                                        const validProcs = (patient.procedures || []).filter((p: any) => !p.deleted);
+                                                                        const isFullyImported = validProcs.length > 0 && validProcs.every((p: any) => p.source === 'External Import' || p.type === 'External Import');
+                                                                        return isFullyImported ? (
+                                                                            <SimpleTooltip content="Imported Patient">
+                                                                                <div className="flex items-center justify-center w-[18px] h-[18px] rounded-full bg-blue-100 border border-blue-200 shrink-0">
+                                                                                    <UploadCloud size={10} className="text-blue-600" strokeWidth={2.5} />
+                                                                                </div>
+                                                                            </SimpleTooltip>
+                                                                        ) : null;
+                                                                    })()}
+                                                                </div>
                                                                 {patient.refId && patient.refId !== 'NILL' && patient.refId !== 'No Abha id' && (
-                                                                    <span className="text-[12px] text-slate-500 font-semibold truncate leading-tight mt-1.5 flex items-center gap-1.5">
-                                                                        <span className="inline-block w-1 h-1 rounded-full bg-slate-300"></span>
+                                                                    <span className="text-[11px] text-slate-400 font-bold truncate leading-tight mt-1.5 flex items-center gap-1.5 font-['Plus_Jakarta_Sans']">
+                                                                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-100"></span>
                                                                         {patient.refId}
                                                                     </span>
                                                                 )}
                                                             </div>
                                                             <button 
                                                                 onClick={(e) => { e.stopPropagation(); onEdit(patient); }}
-                                                                className="opacity-0 group-hover/name:opacity-100 transition-all duration-300 p-2.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl shadow-sm border border-blue-100/50 flex items-center justify-center"
+                                                                className="opacity-0 group-hover/name:opacity-100 transition-all duration-300 p-2.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl shadow-sm border border-blue-100 flex items-center justify-center translate-x-4 group-hover/name:translate-x-0"
                                                             >
-                                                                <Edit2 size={14} strokeWidth={2.5} />
+                                                                <Edit2 size={13} strokeWidth={2.5} />
                                                             </button>
                                                         </div>
                                                     </td>
 
                                                     {/* Merged Age / Gender */}
-                                                    <td className="px-3 py-4 border-l border-slate-50/50">
+                                                     <td className="px-3 py-4 border-l border-slate-50">
                                                         <div className="flex items-center justify-center gap-2">
-                                                            <span className="text-[15px] font-bold text-slate-700">{patient.refId === 'GUEST' ? '--' : (patient.age || '--')}</span>
-                                                            <span className="text-slate-300 font-light translate-y-[-1px]">/</span>
+                                                            <span className="text-[14px] font-black text-slate-700 font-['Plus_Jakarta_Sans']">{patient.refId === 'GUEST' ? '--' : (patient.age || '--')}</span>
+                                                            <span className="text-slate-200 font-light translate-y-[-1px]">|</span>
                                                             <span className={cn(
-                                                                "inline-flex items-center justify-center min-w-[22px] h-6 px-1.5 rounded-md text-[11px] font-black tracking-wider uppercase shadow-sm",
+                                                                "inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 rounded-lg text-[10px] font-black tracking-widest uppercase",
                                                                 patient.gender?.toLowerCase() === 'male' 
-                                                                    ? "bg-blue-50 text-blue-600 border border-blue-100" 
-                                                                    : "bg-pink-50 text-pink-600 border border-pink-100"
+                                                                    ? "bg-blue-50/50 text-blue-600 border border-blue-100/50" 
+                                                                    : "bg-pink-50/50 text-pink-600 border border-pink-100/50"
                                                             )}>
                                                                 {patient.refId === 'GUEST' ? '?' : (patient.gender?.charAt(0) || '?')}
                                                             </span>
                                                         </div>
                                                     </td>
 
-                                                    <td className="px-3 py-4 text-[15px] font-semibold text-slate-700 border-l border-slate-50/50">
+                                                     <td className="px-3 py-4 text-[14px] font-bold text-slate-600 border-l border-slate-50 font-['Plus_Jakarta_Sans']">
                                                         {patient.refId === 'GUEST' ? '--' : (patient.mobile || '--')}
                                                     </td>
 
-                                                     <td className="px-3 py-4 border-l border-slate-50/50">
+                                                      <td className="px-3 py-4 border-l border-slate-50">
                                                         <div className="flex flex-col gap-1.5">
-                                                            <span className="text-[15px] font-bold text-slate-900 truncate leading-tight tracking-tight capitalize">
+                                                            <span className="text-[14px] font-black text-slate-800 truncate leading-tight tracking-tight capitalize font-['Plus_Jakarta_Sans']">
                                                                 {lastProc ? lastProc.type : 'None'}
                                                             </span>
                                                             <div className="flex items-center gap-3">
-                                                                <span className="text-[12px] text-slate-500 font-semibold whitespace-nowrap">
+                                                                <span className="text-[10px] text-slate-400 font-bold whitespace-nowrap uppercase tracking-widest font-['Plus_Jakarta_Sans']">
                                                                     {lastProc ? new Date(lastProc.createdAt).toLocaleDateString('en-GB') : ''}
                                                                 </span>
                                                                  <div className="flex items-center gap-3">
                                                                     <button 
                                                                         onClick={(e) => openMediaPopup(e, patient, 'images', lastProc?.id)}
-                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
+                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-300 group/icon"
                                                                     >
-                                                                        <ImageIcon size={13} strokeWidth={2.5} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
-                                                                        <span className="text-[12px] font-bold tabular-nums">
+                                                                        <ImageIcon size={12} strokeWidth={2.5} className="group-hover/icon:scale-110 transition-all" />
+                                                                        <span className="text-[11px] font-black tabular-nums font-['Plus_Jakarta_Sans']">
                                                                             {lastProc?.mediaStats?.images || 0}
                                                                         </span>
                                                                     </button>
                                                                     <button 
                                                                         onClick={(e) => openMediaPopup(e, patient, 'videos', lastProc?.id)}
-                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
+                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-300 group/icon"
                                                                     >
-                                                                        <Play size={11} fill="currentColor" strokeWidth={0} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
-                                                                        <span className="text-[12px] font-bold tabular-nums">
+                                                                        <Play size={10} fill="currentColor" strokeWidth={0} className="group-hover/icon:scale-110 transition-all" />
+                                                                        <span className="text-[11px] font-black tabular-nums font-['Plus_Jakarta_Sans']">
                                                                             {lastProc?.mediaStats?.videos || 0}
-                                                                        </span>
-                                                                    </button>
-                                                                    <button 
-                                                                        onClick={(e) => openMediaPopup(e, patient, 'reports', lastProc?.id)}
-                                                                        className="flex items-center gap-1.5 hover:text-blue-500 transition-all text-slate-400 group/icon"
-                                                                    >
-                                                                        <FileText size={13} strokeWidth={2.5} className="text-slate-300 group-hover/icon:text-blue-500 group-hover/icon:scale-110 transition-all" />
-                                                                        <span className="text-[12px] font-bold tabular-nums">
-                                                                            {lastProc?.mediaStats?.reports || 0}
                                                                         </span>
                                                                     </button>
                                                                 </div>
@@ -769,12 +805,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                     <td className="px-3 py-4">
                                                         <div className="flex items-center justify-start">
                                                             {patient.refId === 'GUEST' ? (
-                                                                <button
+                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); onEdit(patient); }}
-                                                                    className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-full text-[11px] font-black tracking-[0.1em] uppercase shadow-md hover:bg-blue-700 transition-all hover:scale-105"
+                                                                    className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-[10px] font-black tracking-[0.2em] uppercase shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all active:scale-95 font-['Plus_Jakarta_Sans']"
                                                                 >
-                                                                    <Plus size={13} strokeWidth={3} />
-                                                                    Add Patient
+                                                                    <Plus size={14} strokeWidth={3} />
+                                                                    Add Details
                                                                 </button>
                                                             ) : (
                                                                 <SlideToStart onComplete={() => onStartProcedure(patient)} disabled={isLoading || !isCameraConnected} />
@@ -834,7 +870,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                     <button 
                                                                                         onClick={async (e) => {
                                                                                             e.stopPropagation();
-                                                                                            if (downloadingProcs.size > 0) return;
+                                                                                            if (downloadingProcs.size > 0 || !usbConnected) return;
                                                                                             
                                                                                             // Mark all selected as downloading
                                                                                             setDownloadingProcs(prev => {
@@ -860,14 +896,16 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                                 });
                                                                                             }
                                                                                         }}
-                                                                                        disabled={downloadingProcs.size > 0}
+                                                                                        disabled={downloadingProcs.size > 0 || !usbConnected}
                                                                                         className={cn(
                                                                                             "flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm border",
                                                                                             downloadingProcs.size > 0
                                                                                                 ? "bg-slate-100 text-slate-400 border-slate-200 cursor-wait"
-                                                                                                : "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600 shadow-emerald-200/50"
+                                                                                                : !usbConnected
+                                                                                                    ? "bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed"
+                                                                                                    : "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600 shadow-emerald-200/50"
                                                                                         )}
-                                                                                        title={`Download ${selectedProcIds.size} selected procedures as ZIP`}
+                                                                                        title={!usbConnected ? "Connect USB external storage to download" : `Download ${selectedProcIds.size} selected procedures as ZIP`}
                                                                                     >
                                                                                         {downloadingProcs.size > 0 ? (
                                                                                             <Loader2 size={13} className="animate-spin" />
@@ -996,11 +1034,23 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                                      </span>
                                                                                                  </div>
                                                                                              </td>
-                                                                                             <td className="px-6 py-5">
-                                                                                                 <span className="text-[15px] font-bold text-slate-900 capitalize">
-                                                                                                     {proc.type}
-                                                                                                 </span>
-                                                                                             </td>
+                                                                                              <td className="px-6 py-5">
+                                                                                                  <div className="flex items-center gap-1.5">
+                                                                                                      <span className="text-[15px] font-bold text-slate-900 capitalize">{proc.type}</span>
+                                                                                                      {(() => {
+                                                                                                          const allProcs = (patient.procedures || []).filter((p: any) => !p.deleted);
+                                                                                                          const isFullyImported = allProcs.every((p: any) => p.source === 'External Import');
+                                                                                                          const thisProcImported = proc.source === 'External Import';
+                                                                                                          return (!isFullyImported && thisProcImported) ? (
+                                                                                                              <SimpleTooltip content="This procedure was imported">
+                                                                                                                  <div className="flex items-center justify-center w-[16px] h-[16px] rounded-full bg-blue-100 border border-blue-200 shrink-0">
+                                                                                                                      <UploadCloud size={9} className="text-blue-600" strokeWidth={2.5} />
+                                                                                                                  </div>
+                                                                                                              </SimpleTooltip>
+                                                                                                          ) : null;
+                                                                                                      })()} 
+                                                                                                  </div>
+                                                                                              </td>
                                                                                              <td className="px-6 py-5">
                                                                                                   {(() => {
                                                                                                       // Tab 1: Completed
@@ -1166,9 +1216,9 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                                          // If this item is checked, we determine if it's a bulk download
                                                                                                          const isBulk = selectedProcIds.has(proc.id) && selectedProcIds.size > 1;
                                                                                                          
-                                                                                                         // Base case: check if we are already downloading THIS proc
-                                                                                                         if (downloadingProcs.has(proc.id)) return;
-
+                                                                                                         // Base case: check if we are already downloading THIS proc or USB not connected
+                                                                                                         if (downloadingProcs.has(proc.id) || !usbConnected) return;
+                                                                                                         
                                                                                                          try {
                                                                                                              if (isBulk) {
                                                                                                                 // Mark all selected as downloading
@@ -1215,10 +1265,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                                          "w-8 h-8 rounded-lg flex items-center justify-center mx-auto transition-all shadow-sm",
                                                                                                          downloadingProcs.has(proc.id)
                                                                                                             ? "bg-slate-100 text-slate-400 cursor-wait"
-                                                                                                            : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-200/50"
+                                                                                                            : !usbConnected
+                                                                                                                ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                                                                                                                : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-200/50"
                                                                                                      )}
-                                                                                                     title={downloadingProcs.has(proc.id) ? "Preparing ZIP..." : "Download Procedure ZIP"}
-                                                                                                     disabled={downloadingProcs.has(proc.id)}
+                                                                                                     title={!usbConnected ? "Connect USB external storage" : downloadingProcs.has(proc.id) ? "Preparing ZIP..." : "Download Procedure ZIP"}
+                                                                                                     disabled={downloadingProcs.has(proc.id) || !usbConnected}
                                                                                                  >
                                                                                                      {downloadingProcs.has(proc.id) ? (
                                                                                                          <Loader2 size={14} className="animate-spin" />
@@ -1335,13 +1387,13 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                 .resume-annotate-glow {
                     animation: status-blue-pulse 2s infinite;
                 }
-
                 @keyframes status-blue-pulse {
                     0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
                     70% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
                     100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
                 }
             `}</style>
+            {/* Media Popup */}
             <ProcedureMediaPopup 
                 isOpen={mediaPopup.isOpen}
                 onClose={() => setMediaPopup(prev => ({ ...prev, isOpen: false }))}
@@ -1351,5 +1403,6 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                 initialProcedureId={mediaPopup.initialProcedureId}
             />
         </div>
+        </TooltipProvider>
     );
 }

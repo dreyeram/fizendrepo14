@@ -24,6 +24,7 @@ export interface Capture {
     url: string;                   // base64 dataURL or served URL path
     type: "image" | "video";
     thumbnailUrl?: string;
+    thumbnailData?: string;        // [ADDED] Temporary base64 for thumbnails before save
     category?: string;             // P1, P2...
     segmentIndex?: number;
     procedureId?: string;
@@ -40,6 +41,7 @@ export interface PendingUpload {
     segmentIndex: number;
     type: "image" | "video";
     data: string;                  // base64 data or backend URL
+    thumbnailData?: string;        // [ADDED] Thumbnail data for video
     timestamp: string;
 }
 
@@ -116,6 +118,7 @@ export interface UploadResult {
     success: boolean;
     mediaId?: string;
     servedUrl?: string;
+    thumbnailUrl?: string;
     error?: string;
 }
 
@@ -125,7 +128,8 @@ export async function uploadCapture(
     captureData: string,
     type: "IMAGE" | "VIDEO",
     scopeShape?: string,
-    timestamp?: Date
+    timestamp?: Date,
+    thumbnailData?: string
 ): Promise<UploadResult> {
     try {
         // Step 1: Upload the file to disk
@@ -137,6 +141,7 @@ export async function uploadCapture(
                 data: captureData,
                 type,
                 scopeShape,
+                thumbnailData,
             }),
         });
 
@@ -146,13 +151,14 @@ export async function uploadCapture(
             return { success: false, error: `Upload HTTP ${uploadRes.status}: ${errText}` };
         }
 
-        const { filePath } = await uploadRes.json();
+        const { filePath, thumbnailPath } = await uploadRes.json();
 
         // Step 2: Save metadata to database
         const saveRes = await saveMediaMetadata({
             procedureId,
             type,
             filePath,
+            thumbnailPath,
             scopeShape,
             timestamp: timestamp || new Date(),
         });
@@ -160,7 +166,8 @@ export async function uploadCapture(
         if (saveRes.success && saveRes.mediaId) {
             // Build the served URL
             const servedUrl = `/api/capture-serve?path=${encodeURIComponent(filePath)}`;
-            return { success: true, mediaId: saveRes.mediaId, servedUrl };
+            const thumbnailUrl = thumbnailPath ? `/api/capture-serve?path=${encodeURIComponent(thumbnailPath)}` : undefined;
+            return { success: true, mediaId: saveRes.mediaId, servedUrl, thumbnailUrl };
         }
 
         return { success: false, error: saveRes.error || "DB save failed" };
@@ -224,7 +231,12 @@ export async function processPendingUploads(
         try {
             let result: UploadResult;
             if (item.type === "video") {
-                result = await saveVideoReference(realId, item.data, new Date(item.timestamp));
+                // [FIX] Use uploadCapture for videos to handle thumbnailData if present
+                if (item.thumbnailData || item.data.startsWith('data:')) {
+                    result = await uploadCapture(realId, item.data, "VIDEO", (item as any).scopeShape, new Date(item.timestamp), item.thumbnailData);
+                } else {
+                    result = await saveVideoReference(realId, item.data, new Date(item.timestamp));
+                }
             } else {
                 result = await uploadCapture(realId, item.data, "IMAGE", (item as any).scopeShape, new Date(item.timestamp));
             }
@@ -233,6 +245,7 @@ export async function processPendingUploads(
                 onCaptureUpdated(item.captureId, {
                     dbMediaId: result.mediaId,
                     url: result.servedUrl || item.data,
+                    thumbnailUrl: result.thumbnailUrl,
                     uploadStatus: "saved",
                 });
             } else {
@@ -265,18 +278,19 @@ export async function fetchExistingMedia(
             const res = await getProcedureMedia(seg.id);
             if (res.success && res.media) {
                 for (const m of res.media) {
-                    all.push({
-                        id: m.id,
-                        url: m.url,
-                        timestamp: m.timestamp,
-                        type: m.type as "image" | "video",
-                        segmentIndex: seg.index,
-                        category: `P${seg.index}`,
-                        uploadStatus: "saved",
-                        dbMediaId: m.id,
-                        scopeShape: (m as any).scopeShape,
-                        deleted: m.deleted
-                    });
+                        all.push({
+                            id: m.id,
+                            url: m.url,
+                            thumbnailUrl: m.thumbnailUrl, // [FIX] Include thumbnailUrl for session resumption
+                            timestamp: m.timestamp,
+                            type: m.type as "image" | "video",
+                            segmentIndex: seg.index,
+                            category: `P${seg.index}`,
+                            uploadStatus: "saved",
+                            dbMediaId: m.id,
+                            scopeShape: (m as any).scopeShape,
+                            deleted: m.deleted
+                        });
                 }
             }
         } catch (e) {
@@ -297,13 +311,15 @@ export function createCapture(
     type: "image" | "video",
     segmentIndex: number,
     procedureId: string,
-    scopeShape?: "circle" | "square"
+    scopeShape?: "circle" | "square",
+    thumbnailData?: string
 ): Capture {
     return {
         id: `cap-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         timestamp: new Date().toLocaleTimeString(),
         url: data,
         type,
+        thumbnailData,
         category: `P${segmentIndex}`,
         segmentIndex,
         procedureId,

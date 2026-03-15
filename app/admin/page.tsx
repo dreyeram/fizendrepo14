@@ -1,18 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import DashboardShell from "@/components/dashboard/DashboardShell";
-import { Activity, Users, DollarSign } from "lucide-react";
+import { useEffect } from "react";
+import AdminHeader from "@/components/admin/AdminHeader";
 import AdminDashboard from "@/components/admin/AdminDashboard";
-import UserManagement from "@/components/admin/UserManagement";
-import DataSecurity from "@/components/admin/DataSecurity";
-import SettingsPanel from "@/components/panels/SettingsPanel";
-import InventoryManagement from "@/components/admin/InventoryManagement";
-import CommunicationPanel from "@/components/admin/CommunicationPanel";
 import { getSeededAdminId } from "@/app/actions/auth";
 import { getUserProfile } from "@/app/actions/settings";
-import EquipmentSettings from "@/components/settings/EquipmentSettings";
-import { useEffect } from "react";
 
 export default function AdminPage() {
     const [view, setView] = useState('dashboard');
@@ -42,36 +35,24 @@ export default function AdminPage() {
     const adminUser = "Administrator";
 
     return (
-        <DashboardShell
-            role="ADMIN"
-            userName={adminUser}
-            organizationName={orgData?.name}
-            logoPath={orgData?.logoPath}
-            currentView={view}
-            onViewChange={setView}
-            onLogout={() => window.location.href = '/login'}
-        >
-
-            {view === 'dashboard' && (
-                <AdminDashboard
+        <div className="min-h-screen bg-[#F5F5F7] font-apple selection:bg-blue-600/10 selection:text-blue-700">
+            <AdminHeader 
+                userName={adminUser}
+                organizationName={orgData?.name}
+                logoPath={orgData?.logoPath ? (orgData.logoPath.startsWith('data:') ? orgData.logoPath : `/api/capture-serve?path=${encodeURIComponent(orgData.logoPath)}`) : null}
+                onLogout={() => window.location.href = '/login'}
+            />
+            
+            <main className="p-4 pt-2 max-w-[1700px] mx-auto">
+                <AdminDashboard 
                     user={userData}
                     organization={orgData}
                     onUpdate={loadData}
                 />
-            )}
-            {view === 'users' && <UserManagement />}
-            {view === 'data' && <DataSecurity />}
-            {view === 'communication' && <CommunicationPanel />}
-            {view === 'inventory' && orgData && (
-                <InventoryManagement organizationId={orgData.id} />
-            )}
+            </main>
 
-            {view === 'equipment' && (
-                <div className="h-[calc(100vh-64px)]">
-                    <EquipmentSettings />
-                </div>
-            )}
-
-        </DashboardShell>
+            {/* View specific sheets or modals can go here if needed, 
+                but our cards handle most things via expanded popups */}
+        </div>
     );
 }

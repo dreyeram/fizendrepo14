@@ -307,7 +307,7 @@ export default function AdvancedImageSuite({
 
     // UI State
     const [showReportSelection, setShowReportSelection] = useState(false);
-    const [selectedForReport, setSelectedForReport] = useState<Set<string>>(new Set(initialSelectedIds || [])); // Restore missing state
+    const [selectedForReport, setSelectedForReport] = useState<Set<string>>(new Set((initialSelectedIds || []).filter(id => initialCaptures.find(c => c.id === id)?.type !== 'video'))); // Filter initial selections
     const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' | 'warning' } | null>(null);
 
     // Template State
@@ -1029,6 +1029,9 @@ export default function AdvancedImageSuite({
 
     const toggleReportSelection = (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
+        const capture = localCaptures.find(c => c.id === id);
+        if (capture?.type === 'video') return; // Strictly allow images only
+
         setSelectedForReport(prev => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);

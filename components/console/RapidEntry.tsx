@@ -63,7 +63,7 @@ export default function RapidEntry({ onSuccess }: RapidEntryProps) {
             });
 
             if (result.success && result.patient) {
-                const defaultType = encodeProcedureType("1", "1", "1");
+                const defaultType = encodeProcedureType("ent", "nasal_sinus", "nasal_endoscopy");
                 onSuccess(result.patient, defaultType);
                 // Reset form
                 setFormData({ fullName: '', age: '', gender: 'Male', mobile: '', email: '', address: '', referringDoctor: '', notes: '' });

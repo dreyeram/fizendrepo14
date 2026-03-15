@@ -7,6 +7,7 @@ import { X, ChevronLeft, ChevronRight, ZoomIn, Download, Grid, FileText, ImageIc
 interface MediaItem {
     id: string;
     url: string;
+    thumbnailUrl?: string;
     type?: 'image' | 'video';
     notes?: string;
     createdAt?: string;
@@ -191,7 +192,16 @@ export default function MediaGalleryModal({
                                         whileHover={{ scale: 1.02 }}
                                         className="aspect-video relative rounded-xl overflow-hidden bg-black border border-white/5 cursor-pointer group"
                                     >
-                                        <video src={item.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                                        {item.thumbnailUrl ? (
+                                            <img src={item.thumbnailUrl} alt="" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                                        ) : (
+                                            <video 
+                                                src={`${item.url}#t=0.1`} 
+                                                className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                                                muted
+                                                playsInline
+                                            />
+                                        )}
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
                                             <ZoomIn className="text-white drop-shadow-md" size={32} />
                                         </div>

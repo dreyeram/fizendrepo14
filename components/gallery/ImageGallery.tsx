@@ -8,6 +8,7 @@ export interface MediaItem {
     id: string;
     type?: string;
     filePath: string;
+    thumbnailUrl?: string;
     timestamp?: Date | string;
     procedureType?: string;
     procedureDate?: Date | string;
@@ -213,21 +214,31 @@ export default function ImageGallery({ images, initialIndex = 0, isOpen, onClose
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             transition={{ duration: 0.2 }}
+                            className="w-full h-full flex items-center justify-center p-4"
                         >
-                            <img
-                                src={currentImage.filePath}
-                                alt={`Capture ${currentIndex + 1}`}
-                                className="max-h-[75vh] object-contain rounded-lg shadow-2xl cursor-grab"
-                                style={{
-                                    transform: `scale(${zoom}) rotate(${rotation}deg)`,
-                                    transition: 'transform 0.2s ease-out',
-                                    transformOrigin: 'center center'
-                                }}
-                                draggable={false}
-                                onError={(e) => {
-                                    (e.target as HTMLImageElement).src = '/placeholder-image.png';
-                                }}
-                            />
+                            {currentImage.type === 'video' ? (
+                                <video
+                                    src={currentImage.filePath}
+                                    controls
+                                    autoPlay
+                                    className="max-h-[75vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+                                />
+                            ) : (
+                                <img
+                                    src={currentImage.filePath}
+                                    alt={`Capture ${currentIndex + 1}`}
+                                    className="max-h-[75vh] object-contain rounded-lg shadow-2xl cursor-grab"
+                                    style={{
+                                        transform: `scale(${zoom}) rotate(${rotation}deg)`,
+                                        transition: 'transform 0.2s ease-out',
+                                        transformOrigin: 'center center'
+                                    }}
+                                    draggable={false}
+                                    onError={(e) => {
+                                        (e.target as HTMLImageElement).src = '/placeholder-image.png';
+                                    }}
+                                />
+                            )}
                         </motion.div>
                     </div>
 
@@ -264,14 +275,29 @@ export default function ImageGallery({ images, initialIndex = 0, isOpen, onClose
                                     : 'opacity-50 hover:opacity-100'
                                     }`}
                             >
-                                <img
-                                    src={img.filePath}
-                                    alt={`Thumbnail ${index + 1}`}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                        (e.target as HTMLImageElement).src = '/placeholder-image.png';
-                                    }}
-                                />
+                                {img.thumbnailUrl ? (
+                                    <img 
+                                        src={img.thumbnailUrl} 
+                                        alt={`Thumbnail ${index + 1}`} 
+                                        className="w-full h-full object-cover" 
+                                    />
+                                ) : img.type === 'video' ? (
+                                    <video 
+                                        src={`${img.filePath}#t=0.1`} 
+                                        className="w-full h-full object-cover"
+                                        muted
+                                        playsInline
+                                    />
+                                ) : (
+                                    <img 
+                                        src={img.filePath} 
+                                        alt={`Thumbnail ${index + 1}`} 
+                                        className="w-full h-full object-cover"
+                                        onError={(e) => {
+                                            (e.target as HTMLImageElement).src = '/placeholder-image.png';
+                                        }}
+                                    />
+                                )}
                             </button>
                         ))}
                     </div>

@@ -126,6 +126,8 @@ model Procedure {
   report      Report?
   shareTokens ShareToken[]
   
+  source      String?       // [ADDED] Track origin (e.g., 'External Import', 'Direct Capture')
+
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 

@@ -41,17 +41,17 @@ export async function getPatientHistory(patientId: string) {
         const procedures = await prisma.procedure.findMany({
             where: {
                 patientId: patientId,
-                status: "COMPLETED",
             },
             include: {
                 media: {
+                    where: { isDeleted: false },
                     orderBy: { timestamp: 'desc' }
                 },
                 report: true,
                 doctor: true,
             },
             orderBy: {
-                startTime: 'desc'
+                createdAt: 'desc'
             },
             take: 10
         });
@@ -78,7 +78,7 @@ export async function getPatientHistory(patientId: string) {
 
             return {
                 id: proc.id,
-                date: proc.startTime ? proc.startTime.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Unknown Date',
+                date: (proc.startTime || proc.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
                 procedure: proc.type,
                 doctor: proc.doctor?.fullName || "Unknown Doctor",
                 media: mediaItems

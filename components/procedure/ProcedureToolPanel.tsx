@@ -115,53 +115,63 @@ export default function ProcedureToolPanel({
 
                     {/* HEADER ROW: [Exit] [Zoom] | [Timer] | [Settings] [End] */}
                     <div className="flex items-center justify-between px-3 py-3 min-h-[56px] relative z-20">
-                        {/* LEFT: Exit & Zoom */}
-                        <div className="flex-1 flex items-center justify-start gap-2">
+                        {/* LEFT: Exit */}
+                        <div className="flex items-center justify-start">
                             <button
                                 onClick={onBack}
-                                className="h-10 w-10 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/20 text-rose-400 hover:text-white transition-all shadow-lg flex items-center justify-center"
+                                className="h-10 w-10 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/20 text-rose-400 hover:text-white transition-all shadow-lg flex items-center justify-center active:scale-90"
                                 title="Exit Procedure"
                             >
                                 <ArrowLeft size={18} />
                             </button>
-                            
+                        </div>
+
+                        {/* RIGHT: Status Pills & Actions */}
+                        <div className="flex items-center justify-end gap-2 overflow-hidden">
+                            {/* Mini Zoom Pill (only shows when zoomed) */}
                             <AnimatePresence>
                                 {zoom > 1.01 && (
                                     <motion.div
-                                        initial={{ opacity: 0, x: -10, scale: 0.95 }}
+                                        initial={{ opacity: 0, x: 10, scale: 0.95 }}
                                         animate={{ opacity: 1, x: 0, scale: 1 }}
-                                        exit={{ opacity: 0, x: -10, scale: 0.95 }}
-                                        className="h-10 px-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.1)] flex items-center gap-2 backdrop-blur-md"
+                                        exit={{ opacity: 0, x: 10, scale: 0.95 }}
+                                        className="h-10 px-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.1)] flex items-center gap-2 backdrop-blur-md shrink-0"
                                     >
                                         <ZoomIn size={14} className="text-amber-500/60" />
-                                        <span className="text-[11px] font-black text-amber-500 tabular-nums tracking-wider">
+                                        <span className="text-[11px] font-black text-amber-500 tabular-nums tracking-wider whitespace-nowrap">
                                             {(zoom || 1).toFixed(2)}x
                                         </span>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
-                        </div>
 
-                        {/* CENTER: Timer */}
-                        <div className="flex-shrink-0 flex items-center justify-center pointer-events-none">
-                            <div className={`flex items-center gap-2.5 h-10 px-5 rounded-xl border backdrop-blur-md shadow-inner transition-all duration-500 ${isRecording ? "bg-red-950/80 border-red-500/50 shadow-[0_0_25px_rgba(239,68,68,0.25)] ring-1 ring-red-500/20" : "bg-black/60 border-white/10"}`}>
-                                {isRecording ? (
-                                    <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_#ef4444]" />
-                                ) : (
-                                    <Clock size={13} className="text-emerald-400" />
-                                )}
-                                <span ref={timerDisplayRef} className={`text-[15px] font-mono font-black tabular-nums leading-none tracking-tight ${isRecording ? "text-red-400" : "text-white"}`}>
+                            {/* Timer Pill */}
+                            <div className="flex items-center gap-2.5 h-10 px-4 rounded-xl border border-white/10 bg-black/60 backdrop-blur-md shadow-inner shrink-0 group">
+                                <Clock size={13} className="text-emerald-400 group-hover:scale-110 transition-transform" />
+                                <span ref={timerDisplayRef} className="text-[14px] font-mono font-black tabular-nums leading-none tracking-tight text-white whitespace-nowrap">
                                     {formatTime(timer)}
                                 </span>
                             </div>
-                        </div>
 
-                        {/* RIGHT: Scope Settings & End Button */}
-                        <div className="flex-1 flex items-center justify-end gap-2">
+                            {/* Recording Pill */}
+                            <AnimatePresence mode="popLayout">
+                                {isRecording && (
+                                    <motion.div
+                                        initial={{ opacity: 0, x: 10, scale: 0.9 }}
+                                        animate={{ opacity: 1, x: 0, scale: 1 }}
+                                        exit={{ opacity: 0, x: 10, scale: 0.9 }}
+                                        className="flex items-center gap-2 h-10 px-3.5 rounded-xl bg-red-500/10 border border-red-500/20 shadow-[0_0_20px_rgba(239,68,68,0.15)] backdrop-blur-md shrink-0"
+                                    >
+                                        <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]" />
+                                        <span className="text-[10px] font-black text-red-500 uppercase tracking-widest leading-none whitespace-nowrap">REC</span>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+
                             {onOpenScopeSettings && (
                                 <button
                                     onClick={onOpenScopeSettings}
-                                    className="h-10 w-10 rounded-xl bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 font-bold flex items-center justify-center shadow-lg transition-all active:scale-95 border border-indigo-500/20"
+                                    className="h-10 w-10 rounded-xl bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 font-bold flex items-center justify-center shadow-lg transition-all active:scale-95 border border-indigo-500/20 shrink-0"
                                     title="Open Scope Settings"
                                 >
                                     <Settings2 size={18} />
@@ -169,10 +179,10 @@ export default function ProcedureToolPanel({
                             )}
                             <button
                                 onClick={onEndProcedure}
-                                className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] uppercase tracking-[0.1em] flex items-center gap-2.5 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/30"
+                                className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] uppercase tracking-[0.1em] flex items-center gap-2.5 shadow-lg shadow-rose-900/40 transition-all active:scale-95 border border-rose-500/30 shrink-0"
                             >
                                 <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
-                                <span>End</span>
+                                <span className="whitespace-nowrap">End</span>
                             </button>
                         </div>
                     </div>
@@ -407,7 +417,13 @@ export default function ProcedureToolPanel({
                             <span className="text-[11px] font-mono font-bold text-white tabular-nums">{(zoom || 1).toFixed(2)}x</span>
                         </div>
                         <div className="flex items-center gap-4">
-                            <ZoomOut size={12} className="text-zinc-600 shrink-0" />
+                            <button
+                                onClick={() => onZoomChange(Math.max(zoomRange.min, (zoom || 1) - 0.5))}
+                                className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/5 hover:bg-white/10 text-zinc-500 hover:text-white transition-all active:scale-90"
+                                title="Zoom Out"
+                            >
+                                <ZoomOut size={14} className="shrink-0" />
+                            </button>
                             <div className="flex-1 relative h-4 flex items-center">
                                 <div className="absolute inset-x-0 h-1 bg-white/10 rounded-full top-1/2 -translate-y-1/2" />
                                 <motion.div
@@ -433,7 +449,13 @@ export default function ProcedureToolPanel({
                                     style={{ transform: 'translate(-50%, -50%)' }}
                                 />
                             </div>
-                            <ZoomIn size={12} className="text-zinc-600 shrink-0" />
+                            <button
+                                onClick={() => onZoomChange(Math.min(zoomRange.max, (zoom || 1) + 0.5))}
+                                className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/5 hover:bg-white/10 text-zinc-500 hover:text-white transition-all active:scale-90"
+                                title="Zoom In"
+                            >
+                                <ZoomIn size={14} className="shrink-0" />
+                            </button>
                         </div>
                     </div>
 
@@ -442,7 +464,10 @@ export default function ProcedureToolPanel({
                         {/* Recording Button */}
                         <div className="flex flex-col items-center gap-3">
                             <button
-                                onClick={onToggleRecording}
+                                onClick={() => {
+                                    console.log("[ProcedureToolPanel] RECORD/STOP button clicked! isRecording current:", isRecording);
+                                    onToggleRecording();
+                                }}
                                 className={`w-14 h-14 rounded-[20px] border flex items-center justify-center transition-all duration-300 relative group overflow-hidden ${isRecording ? "bg-rose-500 border-rose-400 shadow-[0_0_30px_rgba(244,63,94,0.3)] ring-4 ring-rose-500/10" : "bg-zinc-900 border-white/5 hover:border-white/10 hover:bg-zinc-800"}`}
                             >
                                 <div className={`transition-all duration-300 ${isRecording ? "w-4 h-4 rounded-sm bg-white" : "w-5 h-5 rounded-full bg-rose-600 group-hover:scale-110"}`} />

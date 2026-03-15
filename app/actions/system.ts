@@ -104,3 +104,31 @@ export async function restartSystem() {
 export async function sleepSystem() {
     return executeCommand('sudo systemctl suspend');
 }
+
+/**
+ * Safely ejects all USB storage devices.
+ * Linux: uses udisksctl to power-off all /media mounts.
+ * Windows: uses PowerShell to eject removable drives.
+ */
+export async function ejectUSB() {
+    const isLinux = process.platform === 'linux';
+    if (isLinux) {
+        // Find all /media mount points and unmount them
+        const listResult = await executeCommand("lsblk -o NAME,MOUNTPOINT -nr | awk '{if ($2 ~ /^\\/media/) print $1}'");
+        if (!listResult.success || !listResult.message) {
+            return { success: false, error: 'No USB storage found' };
+        }
+        const devices = listResult.message.split('\n').map(d => d.trim()).filter(Boolean);
+        let allOk = true;
+        for (const dev of devices) {
+            const r = await executeCommand(`udisksctl power-off -b /dev/${dev} --no-user-interaction`);
+            if (!r.success) allOk = false;
+        }
+        return { success: allOk, message: allOk ? 'USB safely ejected' : 'Some devices could not be ejected' };
+    } else {
+        // Windows: eject all removable drives via PowerShell
+        const script = `(New-Object -comObject Shell.Application).Namespace(17).Items() | Where-Object { $_.Type -eq 'Removable Disk' } | ForEach-Object { $_.InvokeVerb('Eject') }`;
+        const result = await executeCommand(`powershell -Command "${script}"`);
+        return { success: true, message: 'USB eject signal sent' };
+    }
+}

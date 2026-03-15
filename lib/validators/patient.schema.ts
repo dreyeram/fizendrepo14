@@ -30,8 +30,18 @@ export const createPatientSchema = z.object({
         .number()
         .min(0.01, 'Age must be at least 1 month')
         .max(150, 'Age must be realistic (max 150)')
-        .optional(),
-    gender: z.enum(['Male', 'Female', 'Other']).optional(),
+        .optional()
+        .refine(age => {
+            if (age === undefined) return true;
+            if (age >= 1) return Number.isInteger(age);
+            // Infant age: check literal decimal notation (0.1 to 0.11)
+            const ageX10 = age * 10;
+            const ageX100 = age * 100;
+            const is1to9 = ageX10 >= 1 && ageX10 <= 9 && Math.abs(ageX10 - Math.round(ageX10)) < 0.001;
+            const is10to11 = ageX100 >= 10 && ageX100 <= 11 && Math.abs(ageX100 - Math.round(ageX100)) < 0.001;
+            return is1to9 || is10to11;
+        }, 'Age must be a whole number, or a valid infant age (0.1 to 0.11 months)'),
+    gender: z.enum(['Male', 'Female', 'Other', 'Others']).optional(),
     mobile: z
         .string()
         .trim()

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Power, Wifi, WifiOff, RefreshCw, Moon, ChevronDown, Monitor, Video, VideoOff, Battery, Zap, AlertTriangle, HardDrive } from 'lucide-react';
-import { shutdownSystem, restartSystem, sleepSystem, getSystemStatus } from '@/app/actions/system';
+import { Power, RefreshCw, Moon, ChevronDown, Monitor, Video, VideoOff, AlertTriangle, CheckCircle2, HardDrive, LogOut, Loader2 } from 'lucide-react';
+import { shutdownSystem, restartSystem, sleepSystem, getSystemStatus, ejectUSB } from '@/app/actions/system';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { cn } from '@/lib/utils';
@@ -10,23 +10,22 @@ import { cn } from '@/lib/utils';
 export function SystemStatus() {
     const [isLocal, setIsLocal] = useState(false);
     const [status, setStatus] = useState<{
-        wifi: string | null;
         camera: boolean;
         power: 'stable' | 'warning';
         usb: boolean;
     }>({
-        wifi: null,
         camera: true,
         power: 'stable',
         usb: false
     });
     const [currentTime, setCurrentTime] = useState<Date | null>(null);
+    const [isEjecting, setIsEjecting] = useState(false);
+    const [ejectMsg, setEjectMsg] = useState<string | null>(null);
 
     const refreshStatus = async () => {
         try {
             const data = await getSystemStatus();
             setStatus({
-                wifi: data.wifi,
                 camera: data.camera,
                 power: data.power as 'stable' | 'warning',
                 usb: data.usb
@@ -46,7 +45,7 @@ export function SystemStatus() {
         refreshStatus();
 
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        const statusTimer = setInterval(refreshStatus, 10000); // Check every 10s
+        const statusTimer = setInterval(refreshStatus, 10000);
 
         return () => {
             clearInterval(timer);
@@ -58,12 +57,32 @@ export function SystemStatus() {
     const handleRestart = async () => { if (confirm('Restart system?')) await restartSystem(); };
     const handleSleep = async () => { await sleepSystem(); };
 
+    const handleEjectUSB = async () => {
+        setIsEjecting(true);
+        setEjectMsg(null);
+        try {
+            const result = await ejectUSB();
+            setEjectMsg(result.success ? '✓ Ejected safely' : (result.error || 'Eject failed'));
+            if (result.success) {
+                setTimeout(() => {
+                    setEjectMsg(null);
+                    refreshStatus(); // Refresh to update USB status
+                }, 2500);
+            }
+        } catch {
+            setEjectMsg('Eject failed');
+        } finally {
+            setIsEjecting(false);
+        }
+    };
+
     if (!currentTime) return null;
 
     return (
         <Tooltip.Provider delayDuration={300}>
-            <div className="flex items-center gap-2">
-                {/* 5. System Icon (Menu Up) */}
+            <div className="flex items-center gap-1">
+
+                {/* System Power Menu — only on local/kiosk */}
                 {isLocal && (
                     <DropdownMenu.Root>
                         <DropdownMenu.Trigger asChild>
@@ -94,56 +113,113 @@ export function SystemStatus() {
                     </DropdownMenu.Root>
                 )}
 
-                {/* 4. Wifi Signal */}
+                {/* Camera Status — composite icon with badge */}
                 <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                         <div className={cn(
-                            "flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors cursor-default",
-                            status.wifi ? "text-blue-600 hover:bg-blue-50/50" : "text-slate-300"
+                            "relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors cursor-default",
+                            status.camera
+                                ? "text-emerald-500 hover:bg-emerald-50/60"
+                                : "text-rose-500 bg-rose-50/60"
                         )}>
-                            {status.wifi ? <Wifi size={15} strokeWidth={2.5} /> : <WifiOff size={15} strokeWidth={2.5} />}
+                            {status.camera
+                                ? <Video size={16} strokeWidth={2.5} />
+                                : <VideoOff size={16} strokeWidth={2.5} />
+                            }
+                            {/* Status badge — bottom-right corner */}
+                            <span className={cn(
+                                "absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full flex items-center justify-center shadow-sm border-[1.5px]",
+                                status.camera
+                                    ? "bg-emerald-500 border-white"
+                                    : "bg-amber-500 border-white"
+                            )}>
+                                {status.camera
+                                    ? <CheckCircle2 size={8} className="text-white" strokeWidth={3} />
+                                    : <AlertTriangle size={7} className="text-white" strokeWidth={3} />
+                                }
+                            </span>
                         </div>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
-                        <Tooltip.Content className="bg-slate-900 text-white text-[10px] px-2 py-1 rounded-md z-[110]" sideOffset={5}>
-                            {status.wifi ? `Connected to ${status.wifi}` : 'Searching for Network...'}
-                            <Tooltip.Arrow className="fill-slate-900" />
+                        <Tooltip.Content
+                            className={cn(
+                                "text-white text-[10px] px-2.5 py-1.5 rounded-lg z-[110] font-bold shadow-xl",
+                                status.camera ? "bg-emerald-600" : "bg-rose-600"
+                            )}
+                            sideOffset={5}
+                        >
+                            {status.camera ? '✓ Camera Connected' : '⚠ Camera Not Detected'}
+                            <Tooltip.Arrow className={status.camera ? "fill-emerald-600" : "fill-rose-600"} />
                         </Tooltip.Content>
                     </Tooltip.Portal>
                 </Tooltip.Root>
 
-                {/* 3. Camera Status */}
-                <Tooltip.Root>
-                    <Tooltip.Trigger asChild>
-                        <div className={cn(
-                            "flex items-center justify-center w-8 h-8 rounded-lg transition-colors",
-                            status.camera ? "text-emerald-500 hover:bg-emerald-50/50" : "text-rose-500 bg-rose-50/50"
-                        )}>
-                            {status.camera ? <Video size={16} strokeWidth={2.5} /> : <VideoOff size={16} strokeWidth={2.5} />}
-                        </div>
-                    </Tooltip.Trigger>
-                </Tooltip.Root>
+                {/* USB Storage — dropdown with Eject when connected */}
+                {status.usb ? (
+                    <DropdownMenu.Root>
+                        <DropdownMenu.Trigger asChild>
+                            <button className="relative flex items-center justify-center w-8 h-8 rounded-lg text-blue-500 hover:bg-blue-50/60 transition-colors outline-none">
+                                <HardDrive size={16} strokeWidth={2.5} />
+                                {/* Connected dot */}
+                                <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-blue-500 border-[1.5px] border-white shadow-sm" />
+                            </button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                            <DropdownMenu.Content
+                                className="min-w-[220px] bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl border border-slate-100 p-2 z-[100] animate-in slide-in-from-bottom-2 duration-200"
+                                side="top"
+                                sideOffset={8}
+                                align="end"
+                            >
+                                {/* Info row */}
+                                <div className="px-3 py-2 mb-1 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-2">
+                                    <HardDrive size={13} className="text-blue-500 shrink-0" />
+                                    <div className="flex flex-col min-w-0">
+                                        <span className="text-[11px] font-black text-blue-700">External Storage</span>
+                                        <span className="text-[9px] text-blue-400 uppercase tracking-wide">USB Connected</span>
+                                    </div>
+                                </div>
 
-                {/* 2.5 USB Status */}
-                <Tooltip.Root>
-                    <Tooltip.Trigger asChild>
-                        <div className={cn(
-                            "flex items-center justify-center w-8 h-8 rounded-lg transition-colors",
-                            status.usb ? "text-blue-500 hover:bg-blue-50/50" : "text-slate-300"
-                        )}>
-                            <HardDrive size={16} strokeWidth={2.5} />
-                        </div>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                        <Tooltip.Content className="bg-slate-900 text-white text-[10px] px-2 py-1 rounded-md z-[110]" sideOffset={5}>
-                            {status.usb ? 'External USB Storage Detected' : 'No External Storage Found'}
-                            <Tooltip.Arrow className="fill-slate-900" />
-                        </Tooltip.Content>
-                    </Tooltip.Portal>
-                </Tooltip.Root>
+                                {ejectMsg ? (
+                                    <div className={cn(
+                                        "px-3 py-2 rounded-lg text-[11px] font-bold flex items-center gap-2",
+                                        ejectMsg.startsWith('✓') ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
+                                    )}>
+                                        {ejectMsg}
+                                    </div>
+                                ) : (
+                                    <DropdownMenu.Item
+                                        onClick={handleEjectUSB}
+                                        disabled={isEjecting}
+                                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-700 outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        {isEjecting
+                                            ? <Loader2 size={15} className="animate-spin text-amber-500" />
+                                            : <LogOut size={15} className="text-amber-500" />
+                                        }
+                                        <span>{isEjecting ? 'Ejecting...' : 'Safely Eject USB'}</span>
+                                    </DropdownMenu.Item>
+                                )}
+                            </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+                ) : (
+                    <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                            <div className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-300 cursor-default">
+                                <HardDrive size={16} strokeWidth={2} />
+                            </div>
+                        </Tooltip.Trigger>
+                        <Tooltip.Portal>
+                            <Tooltip.Content className="bg-slate-900 text-white text-[10px] px-2 py-1 rounded-md z-[110]" sideOffset={5}>
+                                No External Storage
+                                <Tooltip.Arrow className="fill-slate-900" />
+                            </Tooltip.Content>
+                        </Tooltip.Portal>
+                    </Tooltip.Root>
+                )}
 
-
-                {/* 1. Date and Time (Extreme Corner) */}
+                {/* Date and Time */}
                 <div className="flex flex-col items-end px-2 py-1 rounded-lg hover:bg-black/[0.04] transition-colors cursor-default ml-1">
                     <span className="text-[11px] font-bold text-slate-700 leading-none">
                         {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}

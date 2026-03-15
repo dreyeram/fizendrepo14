@@ -99,9 +99,22 @@ export default function NewPatientForm({
     React.useEffect(() => {
         if (editingPatient) {
             const isGuest = editingPatient.refId === 'GUEST' || editingPatient.fullName === 'Guest Patient';
+            let ageDisplay = '';
+            if (editingPatient.age !== undefined && editingPatient.age !== null) {
+                const ageNum = editingPatient.age;
+                if (ageNum < 1) {
+                    // Convert float (e.g. 0.5) back to notation (0.6)
+                    const mths = Math.round(ageNum * 12);
+                    ageDisplay = `0.${mths}`;
+                } else {
+                    // Ensure whole number for adults
+                    ageDisplay = Math.floor(ageNum).toString();
+                }
+            }
+
             setFormData({
                 fullName: isGuest ? '' : (editingPatient.fullName || ''),
-                age: isGuest ? '' : (editingPatient.age?.toString() || ''),
+                age: isGuest ? '' : ageDisplay,
                 gender: isGuest ? '' : (editingPatient.gender || ''),
                 mobile: isGuest ? '' : (editingPatient.mobile || ''),
                 dialCode: editingPatient.dialCode || '+91', 
@@ -152,19 +165,22 @@ export default function NewPatientForm({
             if (/^0[0-9]/.test(value)) return;
 
             const parts = value.split('.');
+            const intPart = parts[0];
             const decPart = parts[1]; // undefined if no decimal yet
 
+            // Only allow decimal if integer part is 0 (infant mode)
+            if (value.includes('.') && intPart !== '0') return;
+
             if (decPart !== undefined) {
-                // Max 2 decimal digits
+                // Max 2 decimal digits (only for 10 or 11)
                 if (decPart.length > 2) return;
 
-                // Decimal represents months (1–11).
-                // 1 digit: must be 1–9 (0 is not a valid month)
+                // 1 digit: must be 1–9
                 if (decPart.length === 1) {
-                    if (decPart === '0') return; // 0.0 → invalid, must be 0.1+
+                    if (decPart === '0') return; // 0.0 -> block, must be 0.1+
                 }
 
-                // 2 digits: only 10 or 11 are valid months
+                // 2 digits: only 10 or 11 are valid
                 if (decPart.length === 2) {
                     const monthNum = parseInt(decPart, 10);
                     if (monthNum < 10 || monthNum > 11) return;
@@ -229,13 +245,13 @@ export default function NewPatientForm({
         if (ageNum < 0) return "Age cannot be negative";
         if (ageNum > 150) return "Age must be realistic";
 
-        // Decimal age = infant months (1–11). Enforce strictly.
+        // Decimal age = infant months (0.1 to 0.11). Enforce strictly.
         if (formData.age.includes('.')) {
-            const mthsStr = formData.age.split('.')[1];
-            if (!mthsStr || mthsStr === '') return "Enter months after decimal (e.g. 0.6 for 6 months)";
+            const [yrs, mthsStr] = formData.age.split('.');
+            if (yrs !== '0') return "Decimal age only allowed for infants (0.1 to 0.11)";
+            if (!mthsStr || mthsStr === '') return "Enter months (1-11) after decimal";
             const mths = parseInt(mthsStr, 10);
-            if (mths < 1) return "Minimum infant age is 0.1 (1 month)";
-            if (mths > 11) return "Month part cannot exceed 11 — use 0.1 to 0.11";
+            if (mths < 1 || mths > 11) return "Infant age must be between 0.1 and 0.11 months";
         }
 
         const currentCountry = COUNTRY_DATA.find(c => c.code === formData.countryCode) || COUNTRY_DATA[0];
@@ -290,7 +306,7 @@ export default function NewPatientForm({
                     email: formData.email.trim() || undefined,
                     address: formData.address.trim() || undefined,
                     referringDoctor: formData.referringDoctor.trim() || undefined,
-                    refId: isGuestConversion ? (formData.refId.trim() === 'GUEST' ? undefined : formData.refId.trim()) : (formData.refId.trim() || undefined),
+                    refId: isGuestConversion ? (formData.refId.trim() === 'GUEST' ? '' : formData.refId.trim()) : (formData.refId.trim() || undefined),
                     mrn: isGuestConversion ? nextMRN : undefined
                 });
 
@@ -312,7 +328,7 @@ export default function NewPatientForm({
                 });
 
                 if (result.success && result.patient) {
-                    const defaultType = encodeProcedureType("1", "1", "1");
+                    const defaultType = encodeProcedureType("ent", "nasal_sinus", "nasal_endoscopy");
                     onSuccess(result.patient, defaultType);
                     setFormData({ fullName: '', age: '', gender: '', mobile: '', dialCode: '+91', countryCode: 'IN', email: '', address: '', referringDoctor: '', refId: '', notes: '' });
                     fetchNextMRN(); // Refresh MRN for next entry
@@ -372,85 +388,86 @@ export default function NewPatientForm({
                     </div>
                 </div>
 
-                <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
-                    <div className="space-y-4">
-                        {(isMediaImported || editingPatient?.refId === 'GUEST') && (
-                            <motion.div 
-                                initial={{ opacity:0, y: -10 }}
-                                animate={{ opacity:1, y: 0 }}
-                                className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center gap-3 shadow-sm mb-4"
-                            >
-                                <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0">
-                                    <Info size={16} className="text-white" />
-                                </div>
-                                <p className="text-[11px] font-bold text-emerald-700 leading-tight">
-                                    You captured images for a guest. Please add the patient details to complete registration.
-                                </p>
-                            </motion.div>
-                        )}
-
-                        {/* Auto-Generated MRN Display */}
-                        <div className="space-y-1.5 opacity-80">
-                            <label className="text-xs font-bold text-slate-700 flex items-center gap-2">
-                                MRN No
-                                <Lock size={12} className="text-slate-400" />
-                            </label>
-                            <div className="relative">
-                                    <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                                        <Hash size={16} className="text-slate-400" />
+                <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+                    {/* Scrollable Content */}
+                    <div className="flex-1 overflow-hidden p-4">
+                        <div className="h-full flex flex-col justify-between gap-2">
+                            {(isMediaImported || editingPatient?.refId === 'GUEST') && (
+                                <motion.div 
+                                    initial={{ opacity:0, y: -10 }}
+                                    animate={{ opacity:1, y: 0 }}
+                                    className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center gap-3 shadow-sm"
+                                >
+                                    <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0">
+                                        <Info size={16} className="text-white" />
                                     </div>
-                                    <input
-                                        type="text"
-                                        value={editingPatient && editingPatient.refId !== 'GUEST' ? editingPatient.mrn : (nextMRN || 'Fetching...')}
-                                        readOnly
-                                        className="w-full h-11 pl-11 pr-12 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 outline-none cursor-not-allowed font-mono tracking-tight"
-                                    />
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setFormData({ fullName: '', age: '', gender: '', mobile: '', dialCode: '+91', countryCode: 'IN', email: '', address: '', referringDoctor: '', refId: '', notes: '' });
-                                            setMobileStatus('idle');
-                                            setEmailStatus('idle');
-                                            setError('');
-                                        }}
-                                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                        title="Clear entry"
-                                    >
-                                        <RotateCcw size={16} />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                                    <p className="text-[11px] font-bold text-emerald-700 leading-tight">
+                                        You captured images for a guest. Please add the patient details to complete registration.
+                                    </p>
+                                </motion.div>
+                            )}
 
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-1 gap-y-5">
-                                {/* Full Name */}
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Patient Name <span className="text-red-500">*</span></label>
-                                        {renderCharCounter(formData.fullName.length, 22, 5)}
-                                    </div>
-                                    <div className="relative group/input">
-                                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
-                                            <User size={18} />
+                            {/* Auto-Generated MRN Display */}
+                            <div className="space-y-1.5 opacity-80">
+                                <label className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                                    MRN No
+                                    <Lock size={12} className="text-slate-400" />
+                                </label>
+                                <div className="relative">
+                                        <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
+                                            <Hash size={16} className="text-slate-400" />
                                         </div>
                                         <input
                                             type="text"
-                                            name="fullName"
-                                            value={formData.fullName}
-                                            onChange={handleChange}
-                                            placeholder="Eg. Rajesh Kumar"
-                                            className={cn(
-                                                "w-full h-11 pl-11 pr-4 bg-white border rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400/80 transition-all outline-none",
-                                                error && !formData.fullName.trim() ? "border-red-400 bg-red-50/10 focus:border-red-500 ring-1 ring-red-50" : "border-slate-200 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50"
-                                            )}
+                                            value={editingPatient && editingPatient.refId !== 'GUEST' ? editingPatient.mrn : (nextMRN || 'Fetching...')}
+                                            readOnly
+                                            className="w-full h-11 pl-11 pr-12 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 outline-none cursor-not-allowed font-mono tracking-tight"
                                         />
+                                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setFormData({ fullName: '', age: '', gender: '', mobile: '', dialCode: '+91', countryCode: 'IN', email: '', address: '', referringDoctor: '', refId: '', notes: '' });
+                                                setMobileStatus('idle');
+                                                setEmailStatus('idle');
+                                                setError('');
+                                            }}
+                                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                            title="Clear entry"
+                                        >
+                                            <RotateCcw size={16} />
+                                        </button>
                                     </div>
                                 </div>
+                            </div>
 
-                                {/* Age & Gender Row */}
-                                <div className="grid grid-cols-2 gap-4">
+                            <div className="flex flex-col gap-2 flex-1">
+                                <div className="grid grid-cols-1 gap-y-2">
+                                    {/* Full Name */}
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Patient Name <span className="text-red-500">*</span></label>
+                                            {renderCharCounter(formData.fullName.length, 22, 5)}
+                                        </div>
+                                        <div className="relative group/input">
+                                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
+                                                <User size={18} />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                name="fullName"
+                                                value={formData.fullName}
+                                                onChange={handleChange}
+                                                placeholder="Eg. Rajesh Kumar"
+                                                className={cn(
+                                                    "w-full h-11 pl-11 pr-4 bg-white border rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400/80 transition-all outline-none",
+                                                    error && !formData.fullName.trim() ? "border-red-400 bg-red-50/10 focus:border-red-500 ring-1 ring-red-50" : "border-slate-200 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50"
+                                                )}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Age */}
                                     <div className="space-y-1.5 relative">
                                         <div className="flex items-center justify-between">
                                             <label className="text-xs font-bold text-slate-700">Age <span className="text-red-500">*</span></label>
@@ -477,6 +494,7 @@ export default function NewPatientForm({
                                         </div>
                                     </div>
 
+                                    {/* Gender */}
                                     <div className="space-y-2">
                                         <label className="text-[12px] font-bold text-slate-700 tracking-tight">Gender <span className="text-red-500">*</span></label>
                                         <div className={cn(
@@ -501,197 +519,201 @@ export default function NewPatientForm({
                                         </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            <div className="grid grid-cols-1 gap-y-5 border-t border-slate-50 pt-5 mt-2">
-                                {/* Mobile No */}
-                                <div className="space-y-2 relative">
-                                    <label className="text-[12px] font-bold text-slate-700 tracking-tight">Mobile No <span className="text-red-500">*</span></label>
-                                    <div className="flex gap-2">
-                                        <div className="relative group/country select-none w-28 shrink-0">
-                                            <div className={cn(
-                                                "absolute inset-0 flex items-center px-3 bg-slate-50 border rounded-xl pointer-events-none transition-all z-10",
-                                                "border-slate-200 group-focus-within/country:border-blue-600 group-focus-within/country:ring-4 group-focus-within/country:ring-blue-100/50"
-                                            )}>
-                                                <span className="text-lg mr-2">
-                                                    {(COUNTRY_DATA.find(c => c.code === formData.countryCode) || COUNTRY_DATA[0]).flag}
-                                                </span>
-                                                <span className="text-xs font-bold text-slate-700">
-                                                    {(COUNTRY_DATA.find(c => c.code === formData.countryCode) || COUNTRY_DATA[0]).dialCode}
-                                                </span>
-                                                <ChevronDown size={14} className="ml-auto text-slate-400 group-focus-within/country:text-blue-600 transition-colors" />
+                                <div className="grid grid-cols-1 gap-y-2 border-t border-slate-100 pt-2">
+                                    {/* Mobile No */}
+                                    <div className="space-y-2 relative">
+                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Mobile No <span className="text-red-500">*</span></label>
+                                        <div className="flex gap-2">
+                                            <div className="relative group/country select-none w-28 shrink-0">
+                                                <div className={cn(
+                                                    "absolute inset-0 flex items-center px-3 bg-slate-50 border rounded-xl pointer-events-none transition-all z-10",
+                                                    "border-slate-200 group-focus-within/country:border-blue-600 group-focus-within/country:ring-4 group-focus-within/country:ring-blue-100/50"
+                                                )}>
+                                                    <span className="text-lg mr-2">
+                                                        {(COUNTRY_DATA.find(c => c.code === formData.countryCode) || COUNTRY_DATA[0]).flag}
+                                                    </span>
+                                                    <span className="text-xs font-bold text-slate-700">
+                                                        {(COUNTRY_DATA.find(c => c.code === formData.countryCode) || COUNTRY_DATA[0]).dialCode}
+                                                    </span>
+                                                    <ChevronDown size={14} className="ml-auto text-slate-400 group-focus-within/country:text-blue-600 transition-colors" />
+                                                </div>
+
+                                                <select
+                                                    value={formData.countryCode}
+                                                    onChange={(e) => {
+                                                        const country = COUNTRY_DATA.find(c => c.code === e.target.value) || COUNTRY_DATA[0];
+                                                        setFormData(prev => ({
+                                                            ...prev,
+                                                            countryCode: country.code,
+                                                            dialCode: country.dialCode,
+                                                            mobile: ''
+                                                        }));
+                                                    }}
+                                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                                                >
+                                                    {COUNTRY_DATA.map((c) => (
+                                                        <option key={c.code} value={c.code}>{c.name} ({c.dialCode})</option>
+                                                    ))}
+                                                </select>
                                             </div>
 
-                                            <select
-                                                value={formData.countryCode}
-                                                onChange={(e) => {
-                                                    const country = COUNTRY_DATA.find(c => c.code === e.target.value) || COUNTRY_DATA[0];
-                                                    setFormData(prev => ({
-                                                        ...prev,
-                                                        countryCode: country.code,
-                                                        dialCode: country.dialCode,
-                                                        mobile: ''
-                                                    }));
-                                                }}
-                                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
-                                            >
-                                                {COUNTRY_DATA.map((c) => (
-                                                    <option key={c.code} value={c.code}>{c.name} ({c.dialCode})</option>
-                                                ))}
-                                            </select>
+                                            <div className="relative group/input flex-1">
+                                                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
+                                                    <Phone size={16} />
+                                                </div>
+                                                <input
+                                                    type="tel"
+                                                    name="mobile"
+                                                    value={formData.mobile}
+                                                    onChange={handleChange}
+                                                    placeholder="Mobile number"
+                                                    className={cn(
+                                                        "w-full h-11 pl-11 pr-4 bg-white border rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 transition-all outline-none",
+                                                        error && !formData.mobile ? "border-red-400" : "border-slate-200 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50"
+                                                    )}
+                                                />
+                                            </div>
                                         </div>
+                                    </div>
 
-                                        <div className="relative group/input flex-1">
+                                    {/* Email Address */}
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Email Address</label>
+                                            {renderCharCounter(formData.email.length, 255, 200)}
+                                        </div>
+                                        <div className="relative group/input">
                                             <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
-                                                <Phone size={16} />
+                                                <Mail size={18} />
                                             </div>
                                             <input
-                                                type="tel"
-                                                name="mobile"
-                                                value={formData.mobile}
+                                                type="email"
+                                                name="email"
+                                                value={formData.email}
                                                 onChange={handleChange}
-                                                placeholder="Mobile number"
-                                                className={cn(
-                                                    "w-full h-11 pl-11 pr-4 bg-white border rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 transition-all outline-none",
-                                                    error && !formData.mobile ? "border-red-400" : "border-slate-200 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50"
-                                                )}
+                                                placeholder="Eg. patient@example.com"
+                                                className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
                                             />
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* Email Address */}
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Email Address</label>
-                                        {renderCharCounter(formData.email.length, 255, 200)}
-                                    </div>
-                                    <div className="relative group/input">
-                                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
-                                            <Mail size={18} />
+                                <div className="grid grid-cols-1 gap-y-2 border-t border-slate-100 pt-2">
+                                    {/* Residential Address */}
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Residential Address</label>
+                                            {renderCharCounter(formData.address.length, 250, 200)}
                                         </div>
-                                        <input
-                                            type="email"
-                                            name="email"
-                                            value={formData.email}
-                                            onChange={handleChange}
-                                            placeholder="Eg. patient@example.com"
-                                            className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
-                                        />
+                                        <div className="relative group/input">
+                                            <div className="absolute left-4 top-3 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
+                                                <MapPin size={18} />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                name="address"
+                                                value={formData.address}
+                                                onChange={handleChange}
+                                                placeholder="Eg. Anna Nagar, Chennai"
+                                                className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
+                                            />
+                                        </div>
                                     </div>
-                                </div>
-                            </div>
 
-                            <div className="grid grid-cols-1 gap-y-5 border-t border-slate-50 pt-5 mt-2">
-                                {/* Residential Address */}
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Residential Address</label>
-                                        {renderCharCounter(formData.address.length, 250, 200)}
-                                    </div>
-                                    <div className="relative group/input">
-                                        <div className="absolute left-4 top-3 text-slate-400 group-focus-within/input:text-blue-600 transition-colors pointer-events-none">
-                                            <MapPin size={18} />
+                                    {/* Referring Physician */}
+                                    <div className="space-y-2 relative group/ref">
+                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Referring Physician</label>
+                                        <div className="relative">
+                                            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                                <Stethoscope size={18} className="text-slate-400 group-focus-within/ref:text-blue-500 transition-colors" />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={formData.referringDoctor}
+                                                onFocus={() => setShowPhysicianSuggestions(true)}
+                                                onBlur={() => setTimeout(() => setShowPhysicianSuggestions(false), 200)}
+                                                onChange={(e) => setFormData({ ...formData, referringDoctor: e.target.value })}
+                                                placeholder="Eg. Dr. S. Raman"
+                                                className="w-full h-11 pl-10 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
+                                            />
+                                            
+                                            <AnimatePresence>
+                                                {showPhysicianSuggestions && formData.referringDoctor && (
+                                                    <motion.ul
+                                                        initial={{ opacity: 0, y: -10 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        exit={{ opacity: 0, y: -10 }}
+                                                        className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-200"
+                                                    >
+                                                        {physicianSuggestions
+                                                            .filter(p => !formData.referringDoctor || p.toLowerCase().includes(formData.referringDoctor.toLowerCase()))
+                                                            .slice(0, 10)
+                                                            .map((doc, idx) => (
+                                                                <li
+                                                                    key={idx}
+                                                                    onClick={() => {
+                                                                        setFormData({ ...formData, referringDoctor: doc });
+                                                                        setShowPhysicianSuggestions(false);
+                                                                    }}
+                                                                    className="px-4 py-2.5 hover:bg-slate-50 cursor-pointer text-sm font-medium text-slate-700 flex items-center gap-2 border-b border-slate-50 last:border-0"
+                                                                >
+                                                                    <Search size={14} className="text-slate-400" />
+                                                                    {doc}
+                                                                </li>
+                                                            ))}
+                                                    </motion.ul>
+                                                )}
+                                            </AnimatePresence>
                                         </div>
-                                        <input
-                                            type="text"
-                                            name="address"
-                                            value={formData.address}
-                                            onChange={handleChange}
-                                            placeholder="Eg. Anna Nagar, Chennai"
-                                            className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
-                                        />
                                     </div>
-                                </div>
 
-                                {/* Referring Physician */}
-                                <div className="space-y-2 relative group/ref">
-                                    <label className="text-[12px] font-bold text-slate-700 tracking-tight">Referring Physician</label>
-                                    <div className="relative">
-                                        <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                                            <Stethoscope size={18} className="text-slate-400 group-focus-within/ref:text-blue-500 transition-colors" />
+                                    {/* ABHA ID */}
+                                    <div className="space-y-1.5 group/refid">
+                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">ABHA ID</label>
+                                        <div className="relative">
+                                            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                                <FileText size={18} className="text-slate-400 group-focus-within/refid:text-blue-500 transition-colors" />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={formData.refId}
+                                                onChange={(e) => setFormData({ ...formData, refId: e.target.value.toUpperCase() })}
+                                                placeholder="Eg. 12-3456-7890-1234"
+                                                className="w-full h-11 pl-10 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all uppercase placeholder:normal-case"
+                                            />
                                         </div>
-                                        <input
-                                            type="text"
-                                            value={formData.referringDoctor}
-                                            onFocus={() => setShowPhysicianSuggestions(true)}
-                                            onBlur={() => setTimeout(() => setShowPhysicianSuggestions(false), 200)}
-                                            onChange={(e) => setFormData({ ...formData, referringDoctor: e.target.value })}
-                                            placeholder="Eg. Dr. S. Raman"
-                                            className="w-full h-11 pl-10 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all outline-none"
-                                        />
-                                        
-                                        <AnimatePresence>
-                                            {showPhysicianSuggestions && formData.referringDoctor && (
-                                                <motion.ul
-                                                    initial={{ opacity: 0, y: -10 }}
-                                                    animate={{ opacity: 1, y: 0 }}
-                                                    exit={{ opacity: 0, y: -10 }}
-                                                    className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-200"
-                                                >
-                                                    {physicianSuggestions
-                                                        .filter(p => !formData.referringDoctor || p.toLowerCase().includes(formData.referringDoctor.toLowerCase()))
-                                                        .slice(0, 10)
-                                                        .map((doc, idx) => (
-                                                            <li
-                                                                key={idx}
-                                                                onClick={() => {
-                                                                    setFormData({ ...formData, referringDoctor: doc });
-                                                                    setShowPhysicianSuggestions(false);
-                                                                }}
-                                                                className="px-4 py-2.5 hover:bg-slate-50 cursor-pointer text-sm font-medium text-slate-700 flex items-center gap-2 border-b border-slate-50 last:border-0"
-                                                            >
-                                                                <Search size={14} className="text-slate-400" />
-                                                                {doc}
-                                                            </li>
-                                                        ))}
-                                                </motion.ul>
-                                            )}
-                                        </AnimatePresence>
-                                    </div>
-                                </div>
-
-                                {/* ABHA ID */}
-                                <div className="space-y-2 group/refid mt-2">
-                                    <label className="text-[12px] font-bold text-slate-700 tracking-tight">ABHA ID</label>
-                                    <div className="relative">
-                                        <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                                            <FileText size={18} className="text-slate-400 group-focus-within/refid:text-blue-500 transition-colors" />
-                                        </div>
-                                        <input
-                                            type="text"
-                                            value={formData.refId}
-                                            onChange={(e) => setFormData({ ...formData, refId: e.target.value.toUpperCase() })}
-                                            placeholder="Eg. 12-3456-7890-1234"
-                                            className="w-full h-11 pl-10 pr-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:bg-blue-50/5 focus:ring-4 focus:ring-blue-100/50 transition-all uppercase placeholder:normal-case"
-                                        />
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div className="pt-8 flex items-center gap-4">
-                        <button
-                            type="button"
-                            onClick={onCancel}
-                            className="flex-1 h-12 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-all flex items-center justify-center gap-2 active:scale-95"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            disabled={isSubmitting}
-                            className="flex-[2] h-12 bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-700/20 hover:bg-blue-800 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-0"
-                        >
-                            {isSubmitting ? (
-                                <Loader2 className="w-5 h-5 animate-spin text-white/70" />
-                            ) : (
-                                <>
-                                    {editingPatient ? 'Save and Update' : 'Register New Patient'} <Check size={18} />
-                                </>
-                            )}
-                        </button>
+                    {/* Sticky Footer for Buttons */}
+                    <div className="shrink-0 px-4 py-3 bg-slate-50/50 border-t border-slate-100/80">
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="flex-1 h-11 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2 active:scale-95 shadow-sm"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSubmitting}
+                                className="flex-[2] h-11 bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-700/20 hover:bg-blue-800 hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-0 px-4 whitespace-nowrap"
+                            >
+                                {isSubmitting ? (
+                                    <Loader2 className="w-5 h-5 animate-spin text-white/70" />
+                                ) : (
+                                    <>
+                                        <span className="truncate">{editingPatient ? 'Save and Update' : 'Register New Patient'}</span>
+                                        <Check size={18} className="shrink-0" />
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </div>
                 </form>
 

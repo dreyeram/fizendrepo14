@@ -15,11 +15,11 @@ export default function AssistantPage() {
     useEffect(() => {
         const loadData = async () => {
             try {
-                const [seededId, session] = await Promise.all([
-                    getSeededDoctorId(), // For dev environments
-                    getCurrentSession()
-                ]);
-                const userId = seededId || (session.success && session.user ? session.user.id : null);
+                // ALWAYS use actual signed-in session user first
+                const session = await getCurrentSession();
+                const userId = session.success && session.user
+                    ? session.user.id
+                    : await getSeededDoctorId(); // Fallback only if no session
 
                 if (userId) {
                     const result = await getUserProfile(userId);

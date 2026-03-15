@@ -10,6 +10,7 @@ import { useNotify } from "@/lib/store/ui.store";
 interface MediaItem {
     id: string;
     url: string;
+    thumbnailUrl?: string;
     type?: 'image' | 'video' | 'annotated';
     notes?: string;
     createdAt?: string;
@@ -102,6 +103,7 @@ export default function ProcedureMediaPopup({
     const media: MediaItem[] = (activeProcedure?.media || []).map((m: any) => ({
         id: m.id,
         url: m.url || (m.filePath ? `/api/capture-serve?path=${encodeURIComponent(m.filePath)}` : ''),
+        thumbnailUrl: m.thumbnailUrl || (m.thumbnailPath ? `/api/capture-serve?path=${encodeURIComponent(m.thumbnailPath)}` : undefined),
         type: m.type?.toLowerCase() as any,
         createdAt: m.timestamp || m.createdAt,
         deleted: m.isDeleted || m.deleted || false
@@ -331,23 +333,21 @@ export default function ProcedureMediaPopup({
                             <div className="flex gap-4">
                                 <button 
                                     onClick={(e) => {
-                                        if (!usbConnected) {
-                                            notify.error("USB Required", "Please connect an external USB storage device to download media.");
-                                            return;
-                                        }
+                                        if (!usbConnected) return;
                                         // Trigger download
                                         const link = document.createElement('a');
                                         link.href = selectedItem.url;
                                         link.download = `media_${selectedItem.id}`;
                                         link.click();
                                     }}
+                                    disabled={!usbConnected}
                                     className={cn(
                                         "w-14 h-14 rounded-full flex items-center justify-center transition-all border active:scale-90 group",
                                         usbConnected 
                                             ? "bg-white/5 hover:bg-white/10 text-white border-white/5" 
                                             : "bg-white/5 text-white/20 border-white/5 cursor-not-allowed"
                                     )}
-                                    title={usbConnected ? "Download Media" : "USB Storage Required"}
+                                    title={usbConnected ? "Download Media" : "Connect USB external storage"}
                                 >
                                     <Download size={20} className={cn("transition-transform", usbConnected && "group-hover:scale-110")} />
                                 </button>
@@ -439,8 +439,15 @@ const GalleryGrid = ({ items, onSelect, emptyMessage }: any) => (
                     transition={{ type: "spring", stiffness: 300, damping: 20 }}
                     className="flex flex-col gap-3 group cursor-pointer"
                 >
-                    <div className="aspect-square relative rounded-[2rem] overflow-hidden bg-zinc-950 border border-white/10 shadow-2xl p-4 flex items-center justify-center transition-all duration-300 group-hover:bg-zinc-900 group-hover:border-white/20">
-                        <img src={item.url} alt="" className="w-full h-full object-contain opacity-100 transition-all duration-700 saturate-100 group-hover:scale-110" />
+                    <div className="aspect-square relative rounded-[2rem] overflow-hidden bg-zinc-950 border border-white/10 shadow-2xl flex items-center justify-center transition-all duration-300 group-hover:bg-zinc-900 group-hover:border-white/20">
+                        {item.type === 'video' && !item.thumbnailUrl ? (
+                            <div className="flex flex-col items-center gap-2 text-white/20 group-hover:text-blue-500/50 transition-colors">
+                                <Video size={48} strokeWidth={1.5} />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Video</span>
+                            </div>
+                        ) : (
+                            <img src={item.thumbnailUrl || item.url} alt="" className="w-full h-full object-contain opacity-100 transition-all duration-700 saturate-100 group-hover:scale-110" />
+                        )}
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-white/5 transition-all duration-500" />
                     </div>
                     <div className="px-2 text-center">
@@ -453,6 +460,38 @@ const GalleryGrid = ({ items, onSelect, emptyMessage }: any) => (
         </div>
     )
 );
+
+const VideoThumbnail = ({ item }: { item: any }) => {
+    const [thumbError, setThumbError] = useState(false);
+
+    return (
+        <div className="relative w-full h-full flex items-center justify-center">
+            {item.thumbnailUrl && !thumbError ? (
+                <img 
+                    src={item.thumbnailUrl} 
+                    alt="" 
+                    className="w-full h-full object-contain opacity-60 transition-all duration-700 group-hover:scale-110" 
+                    onError={() => {
+                        console.warn("Thumbnail failed to load, falling back to video preview:", item.thumbnailUrl);
+                        setThumbError(true);
+                    }}
+                />
+            ) : (
+                <video 
+                    src={`${item.url}#t=0.1`} 
+                    className="w-full h-full object-cover opacity-60 transition-all duration-700 group-hover:scale-110"
+                    muted
+                    playsInline
+                />
+            )}
+            <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center text-white border border-white/20 group-hover:scale-110 transition-all">
+                    <Play size={24} fill="white" />
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const VideoGrid = ({ items, onSelect, emptyMessage }: any) => (
     items.length === 0 ? (
@@ -469,14 +508,7 @@ const VideoGrid = ({ items, onSelect, emptyMessage }: any) => (
                     className="flex flex-col gap-3 group cursor-pointer"
                 >
                     <div className="aspect-square relative rounded-[2.5rem] overflow-hidden bg-zinc-950 border border-white/10 shadow-2xl p-4 flex items-center justify-center transition-all duration-300 group-hover:bg-zinc-900 group-hover:border-white/20">
-                        <div className="relative w-full h-full flex items-center justify-center">
-                            <img src={item.url} alt="" className="w-full h-full object-contain opacity-60 transition-all duration-700 group-hover:scale-110" />
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center text-white border border-white/20 group-hover:scale-110 transition-all">
-                                    <Play size={24} fill="white" />
-                                </div>
-                            </div>
-                        </div>
+                        <VideoThumbnail item={item} />
                     </div>
                     <div className="px-2 text-center">
                         <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest group-hover:text-blue-400 transition-colors">

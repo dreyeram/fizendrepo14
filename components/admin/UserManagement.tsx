@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { getAllUsers, createNewUser, removeUser } from "@/app/actions/admin";
-import { Plus, Trash2, X, Loader2, Users } from "lucide-react";
+import { getAllUsers, createNewUser, removeUser, updateUser } from "@/app/actions/admin";
+import { Plus, Trash2, X, Loader2, Users, Eye, EyeOff } from "lucide-react";
 
 interface User {
     id: string;
@@ -12,13 +12,20 @@ interface User {
     createdAt: string;
     organization?: { name: string };
 }
+interface UserManagementProps {
+    externalSelectedUser?: User | null;
+    onExternalClose?: () => void;
+}
 
-export default function UserManagement() {
+export default function UserManagement({ externalSelectedUser, onExternalClose }: UserManagementProps = {}) {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
+    const [isEditing, setIsEditing] = useState(false);
+    const [editingUserId, setEditingUserId] = useState<string | null>(null);
+    const [showPasswordInput, setShowPasswordInput] = useState(false);
 
     // Form state
     const [formData, setFormData] = useState({
@@ -27,6 +34,35 @@ export default function UserManagement() {
         role: "DOCTOR",
         password: ""
     });
+
+    // Handle external triggers
+    useEffect(() => {
+        if (externalSelectedUser) {
+            handleEditUser(externalSelectedUser);
+        }
+    }, [externalSelectedUser]);
+
+    function handleEditUser(user: User) {
+        setIsEditing(true);
+        setEditingUserId(user.id);
+        setFormData({
+            fullName: user.fullName,
+            username: user.username,
+            role: user.role || "DOCTOR",
+            password: "" // password blank normally
+        });
+        setShowModal(true);
+        setError("");
+    }
+
+    function resetFormModal() {
+        setIsEditing(false);
+        setEditingUserId(null);
+        setFormData({ fullName: "", username: "", role: "DOCTOR", password: "" });
+        setShowModal(false);
+        setError("");
+        if (onExternalClose) onExternalClose();
+    }
 
     async function loadUsers() {
         setLoading(true);
@@ -41,23 +77,32 @@ export default function UserManagement() {
         loadUsers();
     }, []);
 
-    async function handleCreateUser(e: React.FormEvent) {
+    async function handleCreateOrUpdateUser(e: React.FormEvent) {
         e.preventDefault();
         setError("");
         setSaving(true);
-
-        const result = await createNewUser({
-            username: formData.username,
-            fullName: formData.fullName,
-            role: formData.role,
-            password: formData.password || "TempPass123!"
-        });
+        
+        let result;
+        if (isEditing && editingUserId) {
+             result = await updateUser(editingUserId, {
+                username: formData.username,
+                fullName: formData.fullName,
+                role: formData.role,
+                password: formData.password
+            });
+        } else {
+             result = await createNewUser({
+                username: formData.username,
+                fullName: formData.fullName,
+                role: formData.role,
+                password: formData.password || "TempPass123!"
+            });
+        }
 
         setSaving(false);
 
         if (result.success) {
-            setShowModal(false);
-            setFormData({ fullName: "", username: "", role: "DOCTOR", password: "" });
+            resetFormModal();
             loadUsers();
         } else {
             setError(result.error || "Failed to create user");
@@ -105,7 +150,13 @@ export default function UserManagement() {
                     </div>
                 </div>
                 <button
-                    onClick={() => setShowModal(true)}
+                    onClick={() => {
+                        setIsEditing(false);
+                        setEditingUserId(null);
+                        setFormData({ fullName: "", username: "", role: "DOCTOR", password: "" });
+                        setShowModal(true);
+                        setError("");
+                    }}
                     className="flex items-center justify-center gap-3 bg-white hover:bg-blue-50 text-blue-600 border border-blue-100 px-8 py-3.5 rounded-[1.25rem] font-semibold text-sm uppercase tracking-wider transition-all shadow-xl shadow-blue-900/5 active:scale-95"
                 >
                     <Plus className="w-5 h-5 stroke-[2.5]" />
@@ -162,6 +213,13 @@ export default function UserManagement() {
                                     <td className="px-10 py-6 text-right">
                                         <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-all translate-x-4 group-hover:translate-x-0">
                                             <button
+                                                onClick={() => handleEditUser(user)}
+                                                className="p-3 text-slate-400 hover:text-blue-600 bg-white hover:shadow-lg rounded-xl transition-all border border-transparent hover:border-blue-100"
+                                                title="Edit User"
+                                            >
+                                                <Edit3 className="w-5 h-5" />
+                                            </button>
+                                            <button
                                                 onClick={() => handleDeleteUser(user.id, user.fullName)}
                                                 className="p-3 text-slate-400 hover:text-rose-600 bg-white hover:shadow-lg rounded-xl transition-all border border-transparent hover:border-rose-100"
                                                 title="Delete User"
@@ -185,7 +243,7 @@ export default function UserManagement() {
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            onClick={() => setShowModal(false)}
+                            onClick={() => resetFormModal()}
                             className="absolute inset-0 bg-slate-900/20 backdrop-blur-md"
                         />
                         <motion.div
@@ -197,19 +255,19 @@ export default function UserManagement() {
                             <div className="flex items-center justify-between p-8 border-b border-slate-50 bg-white/50">
                                 <h3 className="text-xl font-semibold text-slate-800 flex items-center gap-4 tracking-tight">
                                     <div className="p-3 bg-blue-50 rounded-2xl text-blue-600">
-                                        <Plus size={24} className="stroke-[2.5]" />
+                                        {isEditing ? <Edit3 size={24} className="stroke-[2.5]" /> : <Plus size={24} className="stroke-[2.5]" />}
                                     </div>
-                                    Add New Staff
+                                    {isEditing ? `Edit Staff: ${formData.fullName}` : "Add New Staff"}
                                 </h3>
                                 <button
-                                    onClick={() => setShowModal(false)}
+                                    onClick={() => resetFormModal()}
                                     className="p-3 text-slate-400 hover:text-slate-900 hover:bg-slate-50 rounded-full transition-all"
                                 >
                                     <X className="w-6 h-6" />
                                 </button>
                             </div>
 
-                            <form onSubmit={handleCreateUser} className="p-10 space-y-8">
+                            <form onSubmit={handleCreateOrUpdateUser} className="p-10 space-y-8">
                                 {error && (
                                     <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-sm font-bold">
                                         <X className="w-5 h-5" />
@@ -262,21 +320,35 @@ export default function UserManagement() {
 
                                 <div>
                                     <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 ml-2">
-                                        Initial Password
+                                        {isEditing ? "Reset Password (Leave blank to keep current)" : "Initial Password *"}
                                     </label>
-                                    <input
-                                        type="password"
-                                        value={formData.password}
-                                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                        className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-4 text-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-sm font-semibold"
-                                        placeholder="Default: TempPass123!"
-                                    />
+                                    <div className="relative">
+                                        <input
+                                            type={showPasswordInput ? "text" : "password"}
+                                            required={!isEditing}
+                                            minLength={!isEditing ? 8 : undefined}
+                                            value={formData.password}
+                                            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                            className="w-full bg-slate-50/50 border border-slate-100 rounded-2xl px-6 py-4 pr-14 text-slate-800 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-sm font-semibold"
+                                            placeholder={isEditing ? "••••••••" : "Min 8 chars, e.g. TempPass1!"}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPasswordInput(p => !p)}
+                                            className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-700 transition-colors"
+                                        >
+                                            {showPasswordInput ? <EyeOff size={18} /> : <Eye size={18} />}
+                                        </button>
+                                    </div>
+                                    {!isEditing && (
+                                        <p className="text-[10px] text-slate-400 font-medium mt-2 ml-2">Minimum 8 characters • blank uses: TempPass123!</p>
+                                    )}
                                 </div>
 
                                 <div className="flex gap-4 pt-4">
                                     <button
                                         type="button"
-                                        onClick={() => setShowModal(false)}
+                                        onClick={() => resetFormModal()}
                                         className="flex-1 py-5 bg-slate-50 hover:bg-slate-100 text-slate-800 rounded-[1.5rem] font-semibold uppercase tracking-wider px-4 transition-all"
                                     >
                                         Cancel
@@ -286,8 +358,8 @@ export default function UserManagement() {
                                         disabled={saving}
                                         className="flex-[2] py-5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-[1.5rem] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-3 shadow-2xl shadow-blue-500/20"
                                     >
-                                        {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus size={20} className="stroke-[2.5]" />}
-                                        {saving ? "Creating..." : "Create Account"}
+                                        {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : (isEditing ? <Edit3 size={20} className="stroke-[2.5]" /> : <Plus size={20} className="stroke-[2.5]" />)}
+                                        {saving ? (isEditing ? "Updating..." : "Creating...") : (isEditing ? "Save Changes" : "Create Account")}
                                     </button>
                                 </div>
                             </form>
@@ -300,3 +372,4 @@ export default function UserManagement() {
 }
 
 import { AnimatePresence, motion } from "framer-motion";
+import { Edit3 } from "lucide-react";

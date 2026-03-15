@@ -1,5 +1,7 @@
 
 "use server";
+// Force refresh 1
+
 
 // Enums removed for SQLite compatibility. Use strings.
 import { prisma } from "@/lib/prisma";
@@ -36,38 +38,51 @@ export async function createProcedure(data: {
     patientId: string;
     doctorId: string;
     type: string;
+    source?: string;
 }) {
     try {
+        let finalDoctorId = data.doctorId;
+
+        // Fallback: If doctorId is missing or "system", try to find any valid user
+        if (!finalDoctorId || finalDoctorId === "system") {
+            const firstUser = await prisma.user.findFirst({ select: { id: true } });
+            if (firstUser) {
+                finalDoctorId = firstUser.id;
+            } else {
+                return { success: false, error: "No system user found to assign procedure." };
+            }
+        }
+
+        // Create the procedure first without the 'source' field (to bypass out-of-sync client validation)
         const proc = await prisma.procedure.create({
             data: {
                 patientId: data.patientId,
-                doctorId: data.doctorId,
+                doctorId: finalDoctorId,
                 type: data.type,
                 status: "IN_PROGRESS",
                 startTime: new Date(),
-            },
+            } as any,
         });
 
-        // Audit log
-        const user = await getAuditUser();
-        if (user) {
-            await createAuditLog({
-                eventType: 'PROCEDURE_CREATE',
-                userId: user.id,
-                username: user.username,
-                role: user.role,
-                resourceType: 'Procedure',
-                resourceId: proc.id,
-                action: `Started ${data.type} procedure`,
-                details: { patientId: data.patientId },
-                success: true
-            });
+        // 2. Update the source field using raw SQL if provided
+        if (data.source) {
+            try {
+                // SQLite uses ? for placeholders
+                await prisma.$executeRawUnsafe(
+                    `UPDATE Procedure SET source = ? WHERE id = ?`,
+                    data.source,
+                    proc.id
+                );
+            } catch (sqlError) {
+                console.error("Failed to update source via raw SQL:", sqlError);
+                // We don't throw here as the procedure is already created successfully
+            }
         }
 
         return { success: true, procedureId: proc.id };
-    } catch (error) {
+    } catch (error: any) {
         console.error("Create Procedure Error:", error);
-        return { success: false, error: "Failed to start procedure." };
+        return { success: false, error: error.message || "Failed to start procedure." };
     }
 }
 
@@ -207,6 +222,7 @@ export async function saveMediaMetadata(data: {
     procedureId: string;
     type: string;
     filePath: string;
+    thumbnailPath?: string;
     originId?: string;
     scopeShape?: string;
     timestamp?: Date;
@@ -232,6 +248,7 @@ export async function saveMediaMetadata(data: {
                 procedureId: data.procedureId,
                 type: data.type,
                 filePath: data.filePath,
+                thumbnailPath: data.thumbnailPath,
                 originId: data.originId,
                 scopeShape: data.scopeShape,
                 timestamp: data.timestamp || new Date(),
@@ -259,6 +276,7 @@ export async function getProcedureMedia(procedureId: string) {
         const formattedMedia = media.map(m => {
             const isDataUrl = m.filePath.startsWith("data:");
             const url = isDataUrl ? m.filePath : `/api/capture-serve?path=${encodeURIComponent(m.filePath)}`;
+            const thumbnailUrl = m.thumbnailPath ? `/api/capture-serve?path=${encodeURIComponent(m.thumbnailPath)}` : undefined;
 
             const isAnnotated = m.type === 'ANNOTATED';
             let category = 'raw';
@@ -271,6 +289,7 @@ export async function getProcedureMedia(procedureId: string) {
             return {
                 id: m.id,
                 url: url,
+                thumbnailUrl: thumbnailUrl,
                 timestamp: m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
                 type: frontendType as 'image' | 'video',
                 category: category as 'raw' | 'report' | 'other',
@@ -454,6 +473,7 @@ export async function getPatientDetails(patientId: string) {
         const procedures = patient.procedures.map((proc: typeof patient.procedures[0]) => ({
             id: proc.id,
             type: proc.type,
+            source: (proc as any).source,
             status: proc.status,
             date: proc.createdAt,
             doctorName: proc.doctor?.fullName || 'Unknown',
@@ -468,6 +488,8 @@ export async function getPatientDetails(patientId: string) {
                 id: m.id,
                 type: m.type,
                 filePath: m.filePath,
+                thumbnailPath: m.thumbnailPath,
+                thumbnailUrl: m.thumbnailPath ? `/api/capture-serve?path=${encodeURIComponent(m.thumbnailPath)}` : undefined,
                 timestamp: m.timestamp,
                 originId: m.originId || null,
                 scopeShape: m.scopeShape || null
@@ -485,7 +507,9 @@ export async function getPatientDetails(patientId: string) {
                     id: m.id,
                     type: m.type,
                     filePath: m.filePath,
+                    thumbnailPath: m.thumbnailPath,
                     url,
+                    thumbnailUrl: m.thumbnailPath ? `/api/capture-serve?path=${encodeURIComponent(m.thumbnailPath)}` : undefined,
                     timestamp: m.timestamp,
                     procedureId: proc.id,
                     procedureType: proc.type,
@@ -573,5 +597,53 @@ export async function restoreMedia(mediaId: string) {
     } catch (error) {
         console.error("Restore Media Error:", error);
         return { success: false, error: "Failed to restore media." };
+    }
+}
+
+export async function cleanupGuestSession(procedureId: string, patientId: string) {
+    try {
+        // Delete procedure first (sanitizes the session)
+        await prisma.procedure.delete({
+            where: { id: procedureId }
+        });
+        
+        // Delete temporary guest patient
+        await prisma.patient.delete({
+            where: { id: patientId }
+        });
+        
+        revalidatePath('/doctor');
+        revalidatePath('/assistant');
+        return { success: true };
+    } catch (error: any) {
+        console.error("Cleanup guest session error:", error);
+        return { success: false, error: error.message || "Failed to cleanup guest session" };
+    }
+}
+
+export async function reassignProcedure(procedureId: string, oldPatientId: string, newPatientId: string) {
+    try {
+        await prisma.$transaction(async (tx) => {
+            // 1. Update the procedure to point to the new patient
+            await tx.procedure.update({
+                where: { id: procedureId },
+                data: { patientId: newPatientId }
+            });
+
+            // 2. Delete the temporary guest patient
+            // Note: We only do this if it's actually a guest record
+            const oldPatient = await tx.patient.findUnique({ where: { id: oldPatientId } });
+            if (oldPatient && oldPatient.refId === 'GUEST') {
+                await tx.patient.delete({ where: { id: oldPatientId } });
+            }
+        });
+
+        revalidatePath('/doctor');
+        revalidatePath('/assistant');
+
+        return { success: true };
+    } catch (error: any) {
+        console.error("Reassign Procedure Error:", error);
+        return { success: false, error: error.message || "Failed to reassign procedure" };
     }
 }

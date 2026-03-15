@@ -12,7 +12,7 @@ export interface CameraFeedHandle {
     getVideoElement(): HTMLVideoElement | null;
 }
 
-const PRINT_MIN_PX = 1200;
+const PRINT_MIN_PX = 1440;
 
 export interface CameraFeedProps {
     className?: string;
@@ -37,7 +37,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
         const [ready, setReady] = useState(false);
         const [error, setError] = useState<string | null>(null);
         const [contSize, setContSize] = useState({ w: 0, h: 0 });
-        const [videoSize, setVideoSize] = useState({ w: 1920, h: 1080 });
+        const [videoSize, setVideoSize] = useState({ w: 2560, h: 1440 });
 
         const { panX, panY, scopes, activeScopeId, drawingShape } = useScopeStore();
         const activeScope = scopes.find(s => s.id === activeScopeId);
@@ -66,7 +66,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
-                            width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 },
+                            width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30 },
                             advanced: [{ whiteBalanceMode: 'manual', exposureMode: 'manual', focusMode: 'manual' }] as any,
                         },
                         audio: false,
@@ -86,7 +86,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                 } catch {
                     try {
                         const stream = await navigator.mediaDevices.getUserMedia({
-                            video: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } },
+                            video: { width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30 } },
                             audio: false,
                         });
                         if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
@@ -152,7 +152,6 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
             }
 
             if (scopeW < 4 || scopeH < 4) return null;
-            // Add a 5% safety margin (0.95 multiplier) to ensure the scope is never cropped
             const fillScale = Math.min(contW / scopeW, contH / scopeH);
             const scaledCx = contW / 2 + (scopeCx - contW / 2) * fillScale;
             const scaledCy = contH / 2 + (scopeCy - contH / 2) * fillScale;
@@ -165,6 +164,39 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
             return `translate(${tx + calX}px, ${ty + calY}px) scale(${fillScale}) scaleX(${arcX})`;
         })();
 
+        // ─────────────────────────────────────────────────────────────────────────
+        //  captureFrame — v5: correct mental model
+        //
+        //  The video element has:
+        //    - style: objectFit='cover', width='100%', height='100%'
+        //    - transform: translate(tx+calX, ty+calY) scale(fillScale) scaleX(arcX)
+        //    - transformOrigin: '50% 50%'  (i.e. container centre)
+        //
+        //  objectFit:cover means the browser internally scales the video so it
+        //  fills the container — letterboxing is NOT used. The video is always
+        //  rendered at full contW × contH in screen space before the CSS transform.
+        //
+        //  So the pre-transform video element occupies exactly [0,0,contW,contH]
+        //  in the element's own coordinate space, and the native video pixels map
+        //  onto that rectangle with cover-fit (centre-aligned, edges cropped).
+        //
+        //  The CSS transform (applied around the container centre 50%/50%) then:
+        //    1. scaleX(arcX)       — stretches/squishes horizontally
+        //    2. scale(fillScale)   — zooms up so scope fills container
+        //    3. translate(tx,ty)   — shifts so scope centre → container centre
+        //
+        //  CSS applies right-to-left, so a point P in element space maps to screen:
+        //    screen.x = (P.x - contW/2) * fillScale * arcX + contW/2 + totalTx
+        //    screen.y = (P.y - contH/2) * fillScale         + contH/2 + totalTy
+        //
+        //  Inverse (what element-space point is visible at screen centre contW/2, contH/2?):
+        //    P.x = (0 - totalTx) / (fillScale * arcX) + contW/2
+        //    P.y = (0 - totalTy) / fillScale           + contH/2
+        //
+        //  That element-space point, converted to native pixels via objectFit:cover
+        //  mapping, is the capture centre. The capture half-size is scopeW/(2*fillScale)
+        //  in element space → native pixels.
+        // ─────────────────────────────────────────────────────────────────────────
         const captureFrame = useCallback((): string | null => {
             const video = videoRef.current;
             const container = containerRef.current;
@@ -182,82 +214,155 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                 const contW = rect ? rect.width : (container?.clientWidth || vw);
                 const contH = rect ? rect.height : (container?.clientHeight || vh);
 
+                // ── 1. arcX ──────────────────────────────────────────────────────
                 let arcX = 1;
                 if (aspectRatioCorrection === '4:3 (Stretch Thin)') arcX = 1.333;
                 else if (aspectRatioCorrection === '4:3 (Squeeze Wide)') arcX = 0.75;
                 else if (aspectRatioCorrection === '1:1') arcX = 0.5625;
 
-                const vA = (vw / vh) * arcX;
+                // ── 2. objectFit:cover mapping ───────────────────────────────────
+                //  The browser renders the video with cover-fit into [0,0,contW,contH].
+                //  Find the rendered rect of the video (may be larger than container,
+                //  centred, edges clipped by overflow:hidden).
+                //
+                //  Native video aspect = vw/vh (NOT affected by arcX — arcX is a CSS
+                //  visual stretch applied AFTER the browser's cover computation).
+                const nativeAR = vw / vh;
+                const contAR = contW / contH;
+                let covW: number, covH: number; // size of the video as rendered by objectFit:cover
+                if (contAR > nativeAR) {
+                    // Container wider → video fills width, overflows height
+                    covW = contW;
+                    covH = contW / nativeAR;
+                } else {
+                    // Container taller → video fills height, overflows width
+                    covH = contH;
+                    covW = contH * nativeAR;
+                }
+                const covOx = (contW - covW) / 2; // offset from container left
+                const covOy = (contH - covH) / 2; // offset from container top
+
+                // ── 3. Reproduce scopeFillTransform values exactly ───────────────
+                //  These use the VISUAL aspect ratio (including arcX) since
+                //  scopeFillTransform is aware of how the video looks on screen.
+                const vA = (vw / vh) * arcX; // visual aspect ratio after arcX
                 const cA = contW / contH;
+
+                // Contain-fit render rect (used by square scope geometry)
                 let renderW: number, renderH: number;
                 if (cA > vA) { renderH = contH; renderW = renderH * vA; }
                 else { renderW = contW; renderH = renderW / vA; }
+                const ox = (contW - renderW) / 2;
+                const oy = (contH - renderH) / 2;
 
-                let screenCx: number, screenCy: number, rScreenX: number, rScreenY: number;
+                // Scope centre and size in screen/element space
+                let scopeCx: number, scopeCy: number, scopeW: number;
                 if (capShape === 'circle') {
                     let cvW: number, cvH: number, cvX: number, cvY: number;
                     if (cA > vA) { cvW = contW; cvH = cvW / vA; cvX = 0; cvY = (contH - cvH) / 2; }
                     else { cvH = contH; cvW = cvH * vA; cvX = (contW - cvW) / 2; cvY = 0; }
-                    screenCx = cvX + capGeo.x * cvW;
-                    screenCy = cvY + capGeo.y * cvH;
-                    rScreenX = rScreenY = (capGeo.width * Math.min(contW, contH)) / 2;
+                    scopeCx = cvX + capGeo.x * cvW;
+                    scopeCy = cvY + capGeo.y * cvH;
+                    scopeW = capGeo.width * Math.min(contW, contH);
                 } else {
-                    const ox = (contW - renderW) / 2;
-                    const oy = (contH - renderH) / 2;
-                    screenCx = ox + capGeo.x * renderW;
-                    screenCy = oy + capGeo.y * renderH;
-                    rScreenX = rScreenY = (capGeo.width * Math.min(renderW, renderH)) / 2;
+                    scopeCx = ox + capGeo.x * renderW;
+                    scopeCy = oy + capGeo.y * renderH;
+                    scopeW = capGeo.width * Math.min(renderW, renderH);
                 }
 
-                const uz = zoom || 1;
-                rScreenX /= uz; rScreenY /= uz;
-                const calScreenX = (store.panX / 100) * 0.8 * contW;
-                const calScreenY = (store.panY / 100) * 0.8 * contH;
-                const navScreenX = zoomPanOffset.x / uz;
-                const navScreenY = zoomPanOffset.y / uz;
+                const fillScale = Math.min(contW / scopeW, contH / scopeW);
 
-                const finalScreenCx = screenCx + calScreenX + navScreenX;
-                const finalScreenCy = screenCy + calScreenY + navScreenY;
+                const scaledCx = contW / 2 + (scopeCx - contW / 2) * fillScale;
+                const scaledCy = contH / 2 + (scopeCy - contH / 2) * fillScale;
+                const tx = contW / 2 - scaledCx;
+                const ty = contH / 2 - scaledCy;
 
-                const ox = (contW - renderW) / 2;
-                const oy = (contH - renderH) / 2;
+                const calX = (store.panX / 100) * 0.8 * contW;
+                const calY = (store.panY / 100) * 0.8 * contH;
+                const totalTx = tx + calX;
+                const totalTy = ty + calY;
 
-                // Map to native video pixels (undoing stretched width)
-                const cx = (finalScreenCx - ox) * (vw / renderW);
-                const cy = (finalScreenCy - oy) * (vh / renderH);
+                // ── 4. Invert the CSS transform ───────────────────────────────────
+                //  Transform applied around transformOrigin = (contW/2, contH/2):
+                //    screen.x = (P.x - contW/2) * fillScale * arcX + contW/2 + totalTx
+                //    screen.y = (P.y - contH/2) * fillScale         + contH/2 + totalTy
+                //
+                //  At screen centre (contW/2, contH/2), solve for P:
+                //    0 = (P.x - contW/2) * fillScale * arcX + totalTx
+                //    P.x = contW/2 - totalTx / (fillScale * arcX)
+                //
+                //    0 = (P.y - contH/2) * fillScale + totalTy
+                //    P.y = contH/2 - totalTy / fillScale
+                //
+                //  P is in element space = pre-transform container coords [0,contW] × [0,contH]
+                const elemX = contW / 2 - totalTx / (fillScale * arcX);
+                const elemY = contH / 2 - totalTy / fillScale;
 
-                // Native radius needs to account for the arcX distortion
-                // because native pixels are NOT stretched, but our screen circles are.
-                const rx = rScreenX * (vw / renderW);
-                const ry = rScreenY * (vh / renderH);
+                // ── 5. Element space → native video pixels ───────────────────────
+                //  The video is rendered objectFit:cover into [0,0,contW,contH].
+                //  covOx/covOy is where the video rect starts inside element space.
+                //  covW/covH is the full rendered size of the video.
+                //  Native pixel = (elemCoord - covOffset) * (nativeDim / covDim)
+                //
+                //  NOTE: arcX is a CSS visual stretch — it does NOT affect the
+                //  objectFit:cover computation (that uses raw vw/vh).
+                //  arcX only affects where the scope geometry was placed visually.
+                //  When we map elem→native we must first UNDO the arcX stretch
+                //  on the X axis, because native pixels are not arcX-stretched.
+                //
+                //  elemX is in arcX-stretched element space.
+                //  Un-stretched elem X = contW/2 + (elemX - contW/2) / arcX
+                const elemXUnstretched = contW / 2 + (elemX - contW / 2) / arcX;
 
-                const srcX = Math.max(0, Math.round(cx - rx));
-                const srcY = Math.max(0, Math.round(cy - ry));
-                const srcW = Math.min(Math.round(rx * 2), vw - srcX);
-                const srcH = Math.min(Math.round(ry * 2), vh - srcY);
+                const nativeCx = (elemXUnstretched - covOx) * (vw / covW);
+                const nativeCy = (elemY - covOy) * (vh / covH);
+
+                // ── 6. Capture half-size in native pixels ────────────────────────
+                //  The scope in element space has diameter = scopeW (pre-transform).
+                //  After fillScale, it fills the container — but we want the original
+                //  scope size, which is scopeW / fillScale ... wait, no.
+                //  We want to capture exactly what was INSIDE the scope boundary,
+                //  which is scopeW/2 in element space (pre-fillScale).
+                //  In native pixels (un-stretching arcX for X):
+                const elemHalfPx = scopeW / 2;
+                const nativeHalfW = (elemHalfPx / arcX) * (vw / covW);
+                const nativeHalfH = elemHalfPx * (vh / covH);
+
+                // ── 7. Source rect ────────────────────────────────────────────────
+                const srcX = Math.max(0, Math.round(nativeCx - nativeHalfW));
+                const srcY = Math.max(0, Math.round(nativeCy - nativeHalfH));
+                const srcW = Math.min(Math.round(nativeHalfW * 2), vw - srcX);
+                const srcH = Math.min(Math.round(nativeHalfH * 2), vh - srcY);
+
                 if (srcW < 2 || srcH < 2) return null;
 
+                // ── 8. Output canvas size ────────────────────────────────────────
+                //  Re-apply arcX to srcW → correct visual width for output image
                 const isCircle = capShape === 'circle';
                 const isSquare = capShape === 'square';
+                const displayW = Math.round(srcW * arcX);
+                const displayH = srcH;
+
                 let canvasW: number, canvasH: number;
                 if (isCircle || isSquare) {
-                    const side = Math.max(srcW * arcX, srcH, PRINT_MIN_PX);
+                    const side = Math.max(displayW, displayH, PRINT_MIN_PX);
                     canvasW = side; canvasH = side;
                 } else {
-                    const long = Math.max(srcW * arcX, srcH);
+                    const long = Math.max(displayW, displayH);
                     const sc = Math.max(long, PRINT_MIN_PX) / long;
-                    canvasW = Math.round(srcW * arcX * sc);
-                    canvasH = Math.round(srcH * sc);
+                    canvasW = Math.round(displayW * sc);
+                    canvasH = Math.round(displayH * sc);
                 }
 
+                // ── 9. Draw ──────────────────────────────────────────────────────
                 const drawCrop = (cv: HTMLCanvasElement, transparent = false) => {
                     const ctx = cv.getContext('2d', { willReadFrequently: true })!;
-                    if (!transparent) { ctx.fillStyle = '#FFF'; ctx.fillRect(0, 0, cv.width, cv.height); }
+                    if (!transparent) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); }
                     ctx.imageSmoothingEnabled = true;
                     (ctx as any).imageSmoothingQuality = 'high';
-                    const stretchedSrcW = srcW * arcX;
-                    const sc = Math.min(cv.width / stretchedSrcW, cv.height / srcH);
-                    const dstW = stretchedSrcW * sc, dstH = srcH * sc;
+                    const sc = Math.min(cv.width / displayW, cv.height / displayH);
+                    const dstW = displayW * sc;
+                    const dstH = displayH * sc;
                     const dstX = (cv.width - dstW) / 2;
                     const dstY = (cv.height - dstH) / 2;
                     ctx.drawImage(video, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
@@ -280,7 +385,9 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                     drawCrop(out, false);
                     return out.toDataURL('image/jpeg', 0.98);
                 }
+
             } else {
+                // ── No scope: capture full frame ─────────────────────────────────
                 const canvas = canvasRef.current;
                 if (!canvas) return null;
                 canvas.width = vw; canvas.height = vh;
@@ -289,7 +396,9 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                 ctx.drawImage(video, 0, 0, vw, vh);
                 return canvas.toDataURL('image/jpeg', 0.95);
             }
-        }, [zoom, zoomPanOffset, aspectRatioCorrection]);
+        }, [aspectRatioCorrection]);
+        // NOTE: zoom / zoomPanOffset intentionally not used here.
+        // scopeFillTransform (the view) doesn't use them, so capture must not either.
 
         useImperativeHandle(ref, () => ({
             captureFrame,

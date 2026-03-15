@@ -34,9 +34,10 @@ interface Props {
     patient: { name: string; age?: number; gender?: string; id: string;[key: string]: any };
     onBack?: () => void;
     onGenerateReport?: (captures: Capture[]) => void;
+    isDirectProcedure?: boolean;
 }
 
-export default function ProcedureMode({ procedureId, patient, onBack, onGenerateReport }: Props) {
+export default function ProcedureMode({ procedureId, patient, onBack, onGenerateReport, isDirectProcedure }: Props) {
     // ── Guard ──
     if (!patient) {
         return (
@@ -62,7 +63,8 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const recordedChunksRef = useRef<Blob[]>([]);
-    const isProcessingRecording = useRef(false);
+    const [isRecordingProcessing, setIsRecordingProcessing] = useState(false);
+    const isProcessingRecordingRef = useRef(false); // rename to match state or just use state
 
     // ── Captures ──
     const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
@@ -293,19 +295,39 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
     //   3. On stop: FileReader → base64 data URL → uploadCapture pipeline
     //      (same pathway as photo captures so it appears in gallery).
     const toggleRecording = useCallback(async () => {
-        if (isProcessingRecording.current) return;
-        isProcessingRecording.current = true;
+        if (isProcessingRecordingRef.current) {
+            console.log("[Recording] toggleRecording called while already processing. Skipping.");
+            return;
+        }
+        isProcessingRecordingRef.current = true;
+        setIsRecordingProcessing(true);
+        console.log("[Recording] toggleRecording invoked. Current state isRecording:", isRecording);
 
         try {
             if (!isRecording) {
                 // ── START ──────────────────────────────────────────────
                 const videoEl = feedRef.current?.getVideoElement();
+                console.log("[Recording] START path. Video element present:", !!videoEl);
                 const stream = videoEl?.srcObject instanceof MediaStream
                     ? videoEl.srcObject
                     : null;
 
                 if (!stream) {
-                    console.warn("[Recording] No MediaStream available. Video element:", videoEl, "srcObject:", videoEl?.srcObject);
+                    console.warn("[Recording] START failed: No MediaStream available. videoEl:", videoEl, "srcObject:", videoEl?.srcObject);
+                    playSound("error");
+                    return;
+                }
+                
+                const tracks = stream.getTracks();
+                console.log("[Recording] Stream info:", { 
+                    id: stream.id, 
+                    active: stream.active, 
+                    tracks: tracks.map(t => ({ kind: t.kind, label: t.label, enabled: t.enabled, state: t.readyState }))
+                });
+
+                if (tracks.filter(t => t.kind === 'video').length === 0) {
+                    console.warn("[Recording] START failed: Stream has no video tracks.");
+                    playSound("error");
                     return;
                 }
 
@@ -316,6 +338,8 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         ? 'video/webm;codecs=vp8'
                         : 'video/webm';
 
+                console.log("[Recording] Selected mimeType:", mimeType);
+
                 try {
                     const rec = new MediaRecorder(stream, { mimeType });
                     recordedChunksRef.current = [];
@@ -325,22 +349,31 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                     rec.start(200); // collect chunks every 200ms
                     mediaRecorderRef.current = rec;
                     setIsRecording(true);
-                    console.log("[Recording] Started:", mimeType);
+                    console.log("[Recording] MediaRecorder successfully started.");
                 } catch (err) {
-                    console.error("[Recording] MediaRecorder start failed:", err);
+                    console.error("[Recording] MediaRecorder start exception:", err);
+                    playSound("error");
                 }
 
             } else {
                 // ── STOP ───────────────────────────────────────────────
+                console.log("[Recording] STOP path.");
                 setIsRecording(false);
                 const rec = mediaRecorderRef.current;
-                if (!rec || rec.state === "inactive") return;
+                console.log("[Recording] Recorder state:", rec?.state);
+
+                if (!rec || rec.state === "inactive") {
+                    console.warn("[Recording] STOP early return: No active recorder found.");
+                    return;
+                }
 
                 rec.onstop = () => {
                     rec.onstop = null;
                     const chunks = recordedChunksRef.current;
                     if (chunks.length === 0) {
                         console.warn("[Recording] No chunks recorded");
+                        setIsRecordingProcessing(false);
+                        isProcessingRecordingRef.current = false;
                         return;
                     }
 
@@ -354,51 +387,94 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                     const reader = new FileReader();
                     reader.onloadend = async () => {
                         const base64Data = reader.result as string;
+                        console.log("[Recording] FileReader finished, base64 length:", base64Data.length);
+                        
+                        // [ADDED] Capture a thumbnail frame
+                        const thumbnailData = feedRef.current?.captureFrame() || undefined;
+                        console.log("[Recording] Thumbnail captured:", !!thumbnailData);
+
                         const activeScope = scopes.find(s => s.id === activeScopeId);
                         const scopeShape = activeScope?.shape;
 
-                        const newCap = createCapture(base64Data, "video", activeSegmentIndex, procedureId, scopeShape);
+                        const newCap = createCapture(base64Data, "video", activeSegmentIndex, procedureId, scopeShape, thumbnailData);
+                        console.log("[Recording] Adding capture to store:", newCap.id);
                         addCapture(newCap);
 
                         const activeProcId = segments.find(s => s.index === activeSegmentIndex)?.id;
                         if (activeProcId && !activeProcId.toString().startsWith("temp-")) {
                             try {
-                                const result = await uploadCapture(activeProcId.toString(), base64Data, "VIDEO", scopeShape);
+                                console.log("[Recording] Uploading to DB for proc:", activeProcId);
+                                const result = await uploadCapture(activeProcId.toString(), base64Data, "VIDEO", scopeShape, new Date(), thumbnailData);
+                                console.log("[Recording] Upload result:", result.success ? "SUCCESS" : "FAILED", result.error || "");
                                 setCaptures(prev => prev.map(c =>
                                     c.id === newCap.id
                                         ? {
                                             ...c,
                                             dbMediaId: result.success ? result.mediaId : c.dbMediaId,
                                             url: result.success ? (result.servedUrl || c.url) : c.url,
+                                            thumbnailUrl: result.success ? (result.thumbnailUrl || c.thumbnailUrl) : c.thumbnailUrl,
                                             uploadStatus: result.success ? "saved" as const : "failed" as const,
                                         }
                                         : c
                                 ));
                             } catch (err) {
-                                console.error("[Recording] Upload failed:", err);
+                                console.error("[Recording] Upload exception:", err);
                                 setCaptures(prev => prev.map(c =>
                                     c.id === newCap.id ? { ...c, uploadStatus: "failed" as const } : c
                                 ));
                             }
                         } else if (activeProcId) {
+                            console.log("[Recording] Segment is temporary, marking as pending upload");
                             setPendingUploads(prev => [...prev, {
                                 captureId: newCap.id,
                                 tempSegmentId: activeProcId.toString(),
                                 segmentIndex: activeSegmentIndex,
                                 type: "video",
                                 data: base64Data,
+                                thumbnailData,
                                 timestamp: newCap.timestamp,
                             }]);
+                        } else {
+                            console.warn("[Recording] No activeProcId found, video might not be correctly linked");
                         }
+                        setIsRecordingProcessing(false);
+                        isProcessingRecordingRef.current = false;
+                    };
+                    reader.onerror = (e) => {
+                        console.error("[Recording] FileReader error:", e);
+                        setIsRecordingProcessing(false);
+                        isProcessingRecordingRef.current = false;
                     };
                     reader.readAsDataURL(blob);
                 };
+                console.log("[Recording] Calling rec.stop()");
                 rec.stop();
             }
+        } catch (err) {
+            console.error("[Recording] Global error in toggleRecording:", err);
+            // On catch, we must ensure flags are cleared
+            setIsRecordingProcessing(false);
+            isProcessingRecordingRef.current = false;
         } finally {
-            setTimeout(() => { isProcessingRecording.current = false; }, 300);
+            if (!isRecording) {
+                // We were STARTING. If we failed or succeeded, we clear the 'processing' flag
+                // shortly after to allow the user to click STOP later.
+                setTimeout(() => { 
+                    isProcessingRecordingRef.current = false; 
+                    setIsRecordingProcessing(false);
+                }, 300);
+            } else {
+                // We were STOPPING. If we returned early (e.g. at line 340), we must clear flags.
+                // If we proceeded to rec.stop(), the flags are cleared in onloadend/onerror.
+                const rec = mediaRecorderRef.current;
+                if (!rec || rec.state === "inactive") {
+                    console.warn("[Recording] STOP early return or recorder inactive, clearing flags");
+                    setIsRecordingProcessing(false);
+                    isProcessingRecordingRef.current = false;
+                }
+            }
         }
-    }, [isRecording, activeSegmentIndex, segments, procedureId]);
+    }, [isRecording, activeSegmentIndex, segments, procedureId, scopes, activeScopeId, addCapture]);
 
     // ── Freeze ──
     const handleToggleFreeze = useCallback(() => {
@@ -473,8 +549,9 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
         
         isAddingSegment.current = true;
         try {
-            const { getSeededDoctorId } = await import("@/app/actions/auth");
-            const docId = await getSeededDoctorId();
+            const { getSeededDoctorId, getCurrentSession } = await import("@/app/actions/auth");
+            const session = await getCurrentSession();
+            const docId = (session.success && session.user) ? session.user.id : await getSeededDoctorId();
             if (!docId) return;
 
             // Robust index calculation: find max existing index and add 1
@@ -515,30 +592,46 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
         })();
     }, [pendingUploads, segments]);
 
-    const handleBack = useCallback(() => {
+    const handleBack = useCallback(async () => {
         if (isCompareMode) { setIsCompareMode(false); return; }
+        
+        // If recording is still being processed, wait for it
+        if (isRecordingProcessing) {
+            // Show some feedback? For now just wait
+            let waitCount = 0;
+            while (isProcessingRecordingRef.current && waitCount < 20) {
+                await new Promise(r => setTimeout(r, 200));
+                waitCount++;
+            }
+        }
+
         if (isRecording || captures.length > 0) setShowExitPreview(true);
         else if (onBack) onBack();
-    }, [isCompareMode, isRecording, captures.length, onBack]);
+    }, [isCompareMode, isRecording, captures.length, onBack, isRecordingProcessing]);
 
     const handleEndProcedure = useCallback(() => {
         if (isRecording) setShowRecordingWarning(true);
+        else if (isDirectProcedure && captures.length > 0) performFinish();
         else setShowEndConfirm(true);
-    }, [isRecording]);
+    }, [isRecording, isDirectProcedure, captures.length]);
 
     const performFinish = async () => {
+        // Wait for all recordings and uploads to finish
+        if (isRecordingProcessing || pendingUploads.length > 0) {
+            let waitCount = 0;
+            while ((isProcessingRecordingRef.current || pendingUploads.length > 0) && waitCount < 30) {
+                await new Promise(r => setTimeout(r, 200));
+                waitCount++;
+            }
+        }
+
         if (captures.length === 0) {
             if (onBack) onBack();
             return;
         }
-        if (onGenerateReport) onGenerateReport(captures);
-        (async () => {
-            if (pendingUploads.length > 0) {
-                let retries = 0;
-                while (pendingUploads.length > 0 && retries < 10) { await new Promise(r => setTimeout(r, 500)); retries++; }
-            }
-            try { await endProcedure(procedureId); } catch (e) { console.error("endProcedure failed:", e); }
-        })();
+        if (onGenerateReport) await onGenerateReport(captures);
+        
+        try { await endProcedure(procedureId); } catch (e) { console.error("endProcedure failed:", e); }
     };
 
     // ═══════════════════════════════════════
@@ -595,7 +688,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             {/* ═══ LEFT: VIDEO FEED (75%) ═══ */}
             <main
                 ref={constraintsRef}
-                className={`${isCompareMode ? "w-full" : "w-[75%]"} relative flex flex-col min-w-0 cursor-default overflow-hidden shrink-0 transition-all duration-300 bg-black`}
+                className={`${isCompareMode ? "w-full" : "w-[70%]"} relative flex flex-col min-w-0 cursor-default overflow-hidden shrink-0 transition-all duration-300 bg-black`}
             >
                 <div className="flex-1 relative bg-black overflow-hidden">
 
@@ -1109,7 +1202,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
             {/* ═══ RIGHT: TOOLBAR (25%) ═══ */}
             {
                 !isCompareMode && (
-                    <div className="w-[25%] flex flex-col min-w-0 max-h-screen overflow-hidden border-l border-white/5">
+                    <div className="w-[30%] flex flex-col min-w-0 max-h-screen overflow-hidden border-l border-white/5">
                         <ProcedureToolPanel
                             patient={patient}
                             activeScopeName={scopes.find(s => s.id === activeScopeId)?.name}
@@ -1139,7 +1232,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                             comparisonImage={comparisonImage}
                             onSelectComparisonImage={handleSelectComparisonImage}
                             onBack={handleBack}
-                            onEndProcedure={() => setShowEndConfirm(true)}
+                            onEndProcedure={handleEndProcedure}
                             duration={formatTime(sessionTimer)}
                             settings={settings}
                             updateSetting={updateSetting}
@@ -1175,6 +1268,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                     captures={captures}
                     patientName={patient.name || patient.fullName}
                     duration={formatTime(sessionTimer)}
+                    isWaiting={isRecordingProcessing || pendingUploads.length > 0}
                 />
                 {showRecordingWarning && (
                     <div key="rec-warning" className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center">

@@ -1,4 +1,6 @@
 "use client";
+// Force refresh 1
+
 
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
@@ -12,13 +14,14 @@ import ReportPage from "@/components/reports/ReportPage";
 import AdvancedImageSuite from "@/components/AdvancedImageSuite";
 import ImportWizardModal from "@/components/import/ImportWizardModal";
 import MediaGalleryModal from "@/components/media/MediaGalleryModal";
+import QuickPatientPopup from "@/components/console/QuickPatientPopup";
 // import SegmentController from "@/components/session/SegmentController"; // Removed
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { encodeProcedureType } from "@/types/procedureTypes";
-import { saveReport, createProcedure, getPatientDetails, updateProcedureType, endProcedure, exitProcedure } from "@/app/actions/procedure";
+import { saveReport, createProcedure, getPatientDetails, updateProcedureType, endProcedure, exitProcedure, cleanupGuestSession, reassignProcedure, saveMediaMetadata } from "@/app/actions/procedure";
 import { saveReportPDF } from "@/app/actions/reports";
-import { getSeededDoctorId, getCurrentSession, createPatient, searchPatients } from "@/app/actions/auth";
+import { getSeededDoctorId, getCurrentSession, createPatient, searchPatients, deletePatient, getNextMRN, updatePatient, checkDuplicatePatient } from "@/app/actions/auth";
 import { getUserProfile } from "@/app/actions/settings";
 import { useSessionStore, ProcedureSegment } from "@/lib/store/session.store";
 import { calculateAge } from "@/lib/utils";
@@ -73,6 +76,9 @@ export default function DoctorPage() {
     const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
     const [isDirectProcedure, setIsDirectProcedure] = useState(false);
     const [isCameraConnected, setIsCameraConnected] = useState(false);
+    const [isQuickPatientPopupOpen, setIsQuickPatientPopupOpen] = useState(false);
+    const [quickPatientInitialData, setQuickPatientInitialData] = useState<any>(null);
+    const [quickPatientCaptures, setQuickPatientCaptures] = useState<any[]>([]);
 
     // Context States
     const [orgData, setOrgData] = useState<any>(null);
@@ -118,24 +124,33 @@ export default function DoctorPage() {
         setEditingPatient(null);
         try {
             console.log("[DoctorPage] Booting clinical session...");
-            // Parallel fetch — both calls hit DB independently
-            const [seededId, session] = await Promise.all([
-                getSeededDoctorId(),
-                getCurrentSession()
-            ]);
 
-            const docId = seededId || (session.success && session.user ? session.user.id : null);
+            // ALWAYS use the JWT session to identify WHO is logged in.
+            const session = await getCurrentSession();
 
-            if (docId) {
-                setDoctorId(docId);
-                const userResult = await getUserProfile(docId);
+            if (session.success && session.user) {
+                const sessionUserId = session.user.id;
+                setDoctorId(sessionUserId);
+                const userResult = await getUserProfile(sessionUserId);
                 if (userResult.success && userResult.user) {
                     setUserData(userResult.user);
                     setOrgData(userResult.user.organization);
                     setRefreshKey(prev => prev + 1);
                 }
             } else {
-                console.error("No doctor or session user found — cannot initialize");
+                // No valid session — fallback to first doctor for backward-compat
+                const seededId = await getSeededDoctorId();
+                if (seededId) {
+                    setDoctorId(seededId);
+                    const userResult = await getUserProfile(seededId);
+                    if (userResult.success && userResult.user) {
+                        setUserData(userResult.user);
+                        setOrgData(userResult.user.organization);
+                        setRefreshKey(prev => prev + 1);
+                    }
+                } else {
+                    console.error("No active session and no seeded doctor found.");
+                }
             }
         } catch (error) {
             console.error("Clinical boot error:", error);
@@ -146,8 +161,39 @@ export default function DoctorPage() {
 
     // ... (hydration logic) ...
 
+    // --- VIDEO THUMBNAIL HELPER ---
+    const generateVideoThumbnail = (file: File): Promise<string> => {
+        return new Promise((resolve) => {
+            const video = document.createElement('video');
+            video.preload = 'metadata';
+            video.src = URL.createObjectURL(file);
+            video.muted = true;
+            video.playsInline = true;
+            
+            video.onloadedmetadata = () => {
+                video.currentTime = 0.5; // Capture frame at 0.5s
+            };
+            
+            video.onseeked = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                URL.revokeObjectURL(video.src);
+                resolve(dataUrl);
+            };
+
+            video.onerror = () => {
+                URL.revokeObjectURL(video.src);
+                resolve(""); // Fallback to empty if fails
+            };
+        });
+    };
+
     // --- IMPORT PROCESSING HELPER ---
-    const createProcedureFromImports = async (patientId: string, files: File[], customName: string = "External Import") => {
+    const createProcedureFromImports = async (patientId: string, files: File[], customName: string = "External Import", onProgress?: (p: number) => void) => {
         if (files.length === 0) return;
 
         console.log("Processing imported files:", files.length);
@@ -157,44 +203,70 @@ export default function DoctorPage() {
             const res = await createProcedure({
                 patientId,
                 doctorId: doctorId || "system",
-                type: customName // Use the custom name as the procedure type
+                type: customName, 
+                source: "External Import"
             });
 
-            if (!res.success || !res.procedureId) throw new Error("Failed to create import procedure");
+            if (!res.success || !res.procedureId) {
+                console.error("Procedure creation failed:", res.error);
+                throw new Error(res.error || "Failed to create import procedure");
+            }
             const procedureId = res.procedureId;
 
-            // 2. Convert files to DataURIs
-            const captures = await Promise.all(files.map(async (f) => {
-                return new Promise<any>((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        resolve({
-                            id: crypto.randomUUID(),
-                            url: reader.result as string,
-                            createdAt: new Date().toISOString(),
-                            notes: ""
-                        });
-                    };
-                    reader.readAsDataURL(f);
+            let uploadedCount = 0;
+            const total = files.length;
+
+            for (const file of files) {
+                // Convert media to base64
+                const reader = new FileReader();
+                const dataUrl = await new Promise<string>((resolve) => {
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.readAsDataURL(file);
                 });
-            }));
 
-            // 3. Save Initial Report
-            await saveReport({
-                procedureId,
-                content: JSON.stringify({
-                    captures,
-                    importedAt: new Date().toISOString(),
-                    source: customName
-                })
-            });
+                const isVideo = file.type.startsWith('video/');
+                const type = isVideo ? 'VIDEO' : 'IMAGE';
+                
+                // Generate thumbnail for videos if needed
+                let thumbnailData = "";
+                if (isVideo) {
+                    thumbnailData = await generateVideoThumbnail(file);
+                }
 
-            // 4. Do not set local state or mode - stay in dashboard
-            alert("Files imported successfully. Patient is updated.");
+                // Upload to API
+                const uploadRes = await fetch('/api/capture-upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        procedureId,
+                        data: dataUrl,
+                        type,
+                        filename: file.name,
+                        thumbnailData: thumbnailData || undefined
+                    })
+                });
 
-        } catch (e) {
-            console.error("Failed to process imports", e);
-            alert("Failed to import images.");
+                if (!uploadRes.ok) throw new Error(`Upload failed for ${file.name}`);
+                
+                const uploadJson = await uploadRes.json();
+                if (uploadJson.success) {
+                    // Save metadata
+                    await saveMediaMetadata({
+                        procedureId,
+                        type,
+                        filePath: uploadJson.filePath,
+                        thumbnailPath: uploadJson.thumbnailPath,
+                        timestamp: new Date()
+                    });
+                }
+
+                uploadedCount++;
+                if (onProgress) onProgress((uploadedCount / total) * 100);
+            }
+
+        } catch (e: any) {
+            console.error("Failed to process imports:", e);
+            throw e;
         }
     };
 
@@ -219,18 +291,16 @@ export default function DoctorPage() {
     };
 
     const handleDirectProcedure = async () => {
-        // 0. Check camera status (though button should be disabled, extra safety)
         if (!isCameraConnected) {
             alert("Please connect camera to start procedure.");
             return;
         }
 
-        // Create a unique guest patient every time to ensure fresh GUEST MRN
         const uniqueGuestMobile = `700${Date.now().toString().slice(-7)}`;
         const res = await createPatient({
             fullName: "Guest Patient",
             gender: "Other",
-            age: 0.1, // Validation expects >= 0.01
+            age: 0.1, 
             mobile: uniqueGuestMobile, 
             refId: "GUEST"
         });
@@ -243,6 +313,51 @@ export default function DoctorPage() {
             alert("Initialization failed. Please check system logs.");
         }
     };
+
+    const handleQuickPatientSave = async (data: any) => {
+        if (!activePatient || !activePatient.procedureId) return;
+        
+        try {
+            if (data.type === 'existing') {
+                const res = await reassignProcedure(activePatient.procedureId, activePatient.id, data.patientId);
+                if (res.success) {
+                    setIsQuickPatientPopupOpen(false);
+                    setIsDirectProcedure(false);
+                    setMode('suite');
+                    setLayoutFocus('left'); // Focus on queue
+                    setQueueRefreshKey(prev => prev + 1);
+                } else {
+                    alert("Failed to link patient: " + res.error);
+                }
+            } else {
+                const nextMrnRes = await getNextMRN();
+                const realMrn = nextMrnRes.success ? nextMrnRes.mrn : `RN-${Date.now()}`;
+
+                const updateRes = await updatePatient(activePatient.id, {
+                    fullName: data.fullName,
+                    age: parseFloat(data.age),
+                    gender: data.gender,
+                    mobile: data.mobile,
+                    mrn: realMrn,
+                    refId: "" 
+                } as any);
+
+                if (updateRes.success) {
+                    setIsQuickPatientPopupOpen(false);
+                    setIsDirectProcedure(false);
+                    setMode('suite');
+                    setLayoutFocus('left'); // Focus on queue
+                    setQueueRefreshKey(prev => prev + 1);
+                } else {
+                    alert("Failed to register patient: " + updateRes.error);
+                }
+            }
+        } catch (err) {
+            console.error("Quick Register Error:", err);
+            alert("Unexpected error during registration.");
+        }
+    };
+
     // A. Registration Success (No Auto-Start)
     const handlePatientRegistered = async (patient: any) => {
         // Clear edit state if any
@@ -278,13 +393,14 @@ export default function DoctorPage() {
     };
 
     // B. Import to Existing Patient (No Auto-Start)
-    const handleImportToPatient = async (files: File[], patient: any, customName?: string) => {
+    const handleImportToPatient = async (files: File[], patient: any, customName?: string, onProgress?: (p: number) => void) => {
         // STRICT: Clear any active session and ensure we are in dashboard mode
         endSession();
         setActivePatient(null);
         setMode('suite');
 
-        await createProcedureFromImports(patient.id, files, customName);
+        await createProcedureFromImports(patient.id, files, customName, onProgress);
+        setQueueRefreshKey(prev => prev + 1);
     };
 
     // C. Start Procedure (Manual "Play" Button)
@@ -305,29 +421,28 @@ export default function DoctorPage() {
             return;
         }
 
-        // 1. Resolve doctor ID — try state, then DOCTOR-role user, then current session user
+        // 1. Resolve doctor ID — use current JWT session first, then fallback to seeded
         let currentDoctorId = doctorId;
         if (!currentDoctorId) {
             try {
-                // Try DOCTOR-role user
-                const fetchedId = await getSeededDoctorId();
-                if (fetchedId) {
-                    currentDoctorId = fetchedId;
-                    setDoctorId(fetchedId);
-                } else {
-                    // Fallback: use logged-in session user
-                    const session = await getCurrentSession();
-                    if (session.success && session.user) {
-                        currentDoctorId = session.user.id;
-                        setDoctorId(session.user.id);
-                        // Also load user profile data if missing
-                        if (!userData) {
-                            const userResult = await getUserProfile(session.user.id);
-                            if (userResult.success && userResult.user) {
-                                setUserData(userResult.user);
-                                setOrgData(userResult.user.organization);
-                            }
+                // Use logged-in session user first
+                const session = await getCurrentSession();
+                if (session.success && session.user) {
+                    currentDoctorId = session.user.id;
+                    setDoctorId(session.user.id);
+                    if (!userData) {
+                        const userResult = await getUserProfile(session.user.id);
+                        if (userResult.success && userResult.user) {
+                            setUserData(userResult.user);
+                            setOrgData(userResult.user.organization);
                         }
+                    }
+                } else {
+                    // Last resort: seeded doctor
+                    const fetchedId = await getSeededDoctorId();
+                    if (fetchedId) {
+                        currentDoctorId = fetchedId;
+                        setDoctorId(fetchedId);
                     }
                 }
             } catch (e) {
@@ -594,13 +709,21 @@ export default function DoctorPage() {
                     if (displayId) {
                         return (
                             <ProcedureMode
-                                key={activePatient.id} // Key by patient so component stays mounted across segment switches (P1/P2)
+                                key={activePatient.id} 
                                 procedureId={displayId}
                                 patient={activePatient}
+                                isDirectProcedure={isDirectProcedure}
                                 onBack={async () => {
                                     setLastValidProcId(null);
-                                    console.log("[DoctorPage] onBack callback from ProcedureMode. displayId:", displayId);
-                                    // User explicitly exiting — use exitProcedure for context-aware status
+                                    
+                                    // Guest Cleanup Logic
+                                    if (isDirectProcedure) {
+                                        const sessionState = useSessionStore.getState();
+                                        if (sessionState.captures.length === 0) {
+                                            await cleanupGuestSession(displayId, activePatient.id);
+                                        }
+                                    }
+
                                     try {
                                         await exitProcedure(displayId);
                                     } catch (e) {
@@ -613,22 +736,23 @@ export default function DoctorPage() {
                                     setQueueRefreshKey(prev => prev + 1);
                                 }}
                                 onGenerateReport={(captures) => {
-                                    if (captures.length === 0) {
-                                        setMode('suite');
-                                        setActivePatient(null);
-                                        setIsDirectProcedure(false);
-                                        endSession();
-                                        setQueueRefreshKey(prev => prev + 1);
-                                        return;
-                                    }
-
                                     setLastValidProcId(null);
                                     setReportCaptures(captures);
                                     
                                     if (isDirectProcedure) {
+                                        // Trigger Quick Patient Popup
+                                        setQuickPatientInitialData({
+                                            fullName: "",
+                                            age: "",
+                                            gender: "Male",
+                                            mobile: ""
+                                        });
+                                        setQuickPatientCaptures(captures);
+                                        setIsQuickPatientPopupOpen(true);
+                                        
+                                        // Reset to suite mode so popup is overlaid on dashboard
                                         setMode('suite');
                                         setLayoutFocus('right');
-                                        setEditingPatient(activePatient);
                                     } else {
                                         setMode('annotate');
                                     }
@@ -763,6 +887,7 @@ export default function DoctorPage() {
                     onFocusChange={setLayoutFocus}
                     leftPanel={
                         <PatientQueue
+                            currentUserId={doctorId || undefined}
                             onViewHistory={(p: any, procId: string, tab?: 'images' | 'videos' | 'report') => {
                                 const proc = p.procedures?.find((x: any) => x.id === procId);
                                 if ((proc?.media && proc.media.length > 0) || proc?.report) {
@@ -889,22 +1014,54 @@ export default function DoctorPage() {
                     <ImportWizardModal
                         isOpen={isImportModalOpen}
                         onClose={() => setIsImportModalOpen(false)}
-                        onFinish={(files, patient, importName) => {
-                            setIsImportModalOpen(false);
+                        onFinish={async (files, patient, importData, onProgress) => {
+                            const procName = importData.procedureType || "External Import";
 
-                            if (patient) {
-                                // Existing Patient: Import files, NO auto-start
-                                handleImportToPatient(files, patient, importName);
-                            } else {
-                                // New Patient: Store files, show registration form
-                                setPendingImportFiles(files);
-                                // Store import name for later use (requires extending state or just defaulting)
-                                // Ideally we should store the name too, but for now let's use a simpler approach or add a state.
-                                // Actually, let's just use 'External Import' default if pending, or add a state.
-                                // User said "imported" needs name.
-                                // I'll add a separate state for pendingImportName.
-                                setPendingImportName(importName || "External Import");
-                                setLayoutFocus('right');
+                            if (importData.patientType === 'existing' && patient) {
+                                // Existing Patient: Link and Import
+                                await handleImportToPatient(files, patient, procName, onProgress);
+                            } else if (importData.patientType === 'new') {
+                                // New Patient: Register first, then import
+                                // PREVENT DUPLICATES: Check if patient already exists first
+                                try {
+                                    let targetPatientId: string | null = null;
+
+                                    // Check for existing patient with same name + mobile
+                                    const dupCheck = await checkDuplicatePatient({
+                                        fullName: importData.fullName,
+                                        age: parseFloat(importData.age),
+                                        gender: importData.gender,
+                                        mobile: importData.mobile
+                                    });
+
+                                    if (dupCheck.exists && dupCheck.patient) {
+                                        console.log("Reusing existing patient:", dupCheck.patient.id);
+                                        targetPatientId = dupCheck.patient.id;
+                                    } else {
+                                        // No duplicate found, create new patient
+                                        const regRes = await createPatient({
+                                            fullName: importData.fullName,
+                                            age: parseFloat(importData.age),
+                                            gender: importData.gender,
+                                            mobile: importData.mobile,
+                                            refId: "" // Regular patient
+                                        });
+
+                                        if (regRes.success && regRes.patient) {
+                                            targetPatientId = regRes.patient.id;
+                                        } else {
+                                            throw new Error(regRes.error || "Failed to register patient");
+                                        }
+                                    }
+
+                                    if (targetPatientId) {
+                                        await createProcedureFromImports(targetPatientId, files, procName, onProgress);
+                                        setQueueRefreshKey(prev => prev + 1);
+                                    }
+                                } catch (e: any) {
+                                    console.error("Import registration error:", e);
+                                    throw new Error(e.message || "Failed to register patient for import.");
+                                }
                             }
                         }}
                     />
@@ -1137,6 +1294,14 @@ export default function DoctorPage() {
                 patient={galleryPatient}
                 organizationName={orgData?.name}
                 initialTab={galleryInitialTab}
+            />
+
+            <QuickPatientPopup
+                isOpen={isQuickPatientPopupOpen}
+                onClose={() => setIsQuickPatientPopupOpen(false)}
+                onSave={handleQuickPatientSave}
+                captures={quickPatientCaptures}
+                initialData={quickPatientInitialData}
             />
         </div>
     );

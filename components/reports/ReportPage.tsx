@@ -6,7 +6,7 @@ import { flushSync } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     ArrowLeft, Check, Wand2, Printer, FileText,
-    Loader2, Search, Eye, AlertCircle,
+    Loader2, Search, AlertCircle,
     X, Trash2, Plus, Home, History, ChevronRight, GripVertical, ZoomIn
 } from "lucide-react";
 import { useSessionStore } from "@/lib/store/session.store";
@@ -287,7 +287,7 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
     );
 
     const allMedia: any[] = useMemo(
-        () => (mediaCache || []).filter((m: any) => m.url || m.base64),
+        () => (mediaCache || []).filter((m: any) => (m.url || m.base64) && m.type !== 'video'),
         [mediaCache]
     );
 
@@ -307,6 +307,11 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
         setDragging(null); setDragOver(null);
     };
     const handleDragEnd = () => { setDragging(null); setDragOver(null); };
+
+    const handleRemoveImage = (idToRemove: string) => {
+        const next = uniqueIds.filter(id => id !== idToRemove);
+        onReorder(next);
+    };
 
     const handleReplace = (newId: string) => {
         if (replacingIndex === null) return;
@@ -465,7 +470,7 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                             >
                                 <img src={m.url || m.base64} className="w-full h-full object-cover" alt={`Fig ${i + 1}`} />
 
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setLightbox(m.url || m.base64); }}
                                         className="w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow-md hover:bg-white transition-all"
@@ -477,11 +482,19 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setReplacingIndex(i); }}
                                         className="w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow-md hover:bg-blue-600 hover:text-white transition-all group/rep"
-                                        title="Replace image"
+                                        title="Swap image"
                                     >
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-700 group-hover/rep:text-white transition-colors">
                                             <path d="M7 16V4m0 0L3 8m4-4l4 4" /><path d="M17 8v12m0 0l4-4m-4 4l-4-4" />
                                         </svg>
+                                    </button>
+
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleRemoveImage(id); }}
+                                        className="w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow-md hover:bg-rose-600 hover:text-white transition-all group/del"
+                                        title="Remove from report"
+                                    >
+                                        <Trash2 size={11} className="text-zinc-700 group-hover/del:text-white transition-colors" />
                                     </button>
                                 </div>
 
@@ -821,9 +834,12 @@ export default function ReportPage({
     const [selectedEquipment, setSelectedEquipment] = useState<Record<string, string[]>>({});
     const [prescriptions, setPrescriptions] = useState<Record<string, any[]>>({});
     const [isDirty, setIsDirty] = useState(false);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
     const [showUnsavedModal, setShowUnsavedModal] = useState(false);
     const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null);
-    const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
+    const [showSignModal, setShowSignModal] = useState(false);
+    const [signModalPdfUrl, setSignModalPdfUrl] = useState<string | null>(null);
+    const [signModalGenerating, setSignModalGenerating] = useState(false);
     const [hasPreviewed, setHasPreviewed] = useState(false);
     const [allProcedures, setAllProcedures] = useState<any[]>([]);
     const [showAutoFillPopup, setShowAutoFillPopup] = useState(false);
@@ -969,12 +985,28 @@ export default function ReportPage({
                     if (unassigned.length > 0) {
                         new Set([...segments.map((s: any) => s.id), ...Object.keys(pData)]).forEach(pid => mergeMedia(pid, unassigned));
                     }
-                    currentCaptures.forEach((c: any) => {
-                        const pids = c.procedureId ? [c.procedureId] : Object.keys(mCache);
-                        pids.forEach(pid => { if (!sImages[pid]) sImages[pid] = []; sImages[pid].push(c.id); });
-                    });
-                    Object.keys(sImages).forEach(pid => { sImages[pid] = Array.from(new Set(sImages[pid])); });
                 }
+
+                // ── Compute final default selections for ALL procedures ──
+                // This ensures "max 4" and "annotated priority" throughout all segments.
+                const allPidKeys = Array.from(new Set([...segments.map((s: any) => s.id), ...Object.keys(pData)]));
+                allPidKeys.forEach(pid => {
+                    // Only compute defaults if NO images were recovered from a saved report
+                    if (!sImages[pid] || sImages[pid].length === 0) {
+                        const media = (mCache[pid] || []).filter((m: any) => m.type !== 'video');
+                        // Prioritize: 'report' (annotated) first, then others.
+                        // Stable sort preserves chronological order (latest captured first).
+                        const sorted = [...media].sort((a, b) => {
+                            if (a.category === 'report' && b.category !== 'report') return -1;
+                            if (a.category !== 'report' && b.category === 'report') return 1;
+                            return 0;
+                        });
+                        sImages[pid] = sorted.slice(0, 4).map(m => m.id);
+                    } else {
+                        // Even if pre-selected (from save), ensure we respect the unique IDs
+                        sImages[pid] = Array.from(new Set(sImages[pid]));
+                    }
+                });
 
                 setProceduresData(pData); setMediaCache(mCache); setFormState(fState);
                 setSelectedImagesMap(sImages); setCaptionsMap(cMap);
@@ -1028,16 +1060,18 @@ export default function ReportPage({
         };
     }), [segments, proceduresData, formState, selectedImagesMap, mediaCache, captionsMap, selectedEquipment, availableEquipment, prescriptions]);
 
-    const handleSave = async (finalize = false, overrideId?: string) => {
+    const handleSave = async (finalize = false, overrideId?: string, overrideFormState?: Record<string, any>) => {
         let allSuccess = true;
+        setSaveStatus('saving');
         try {
             const allSegmentsData = assembleAllSegmentsData();
             const segmentsToSave = overrideId ? segments.filter((s: any) => s.id === overrideId) : segments;
             const results = await Promise.all(segmentsToSave.map(async (segment: any) => {
                 const targetId = segment.id;
                 const segmentData = allSegmentsData.find((s: any) => s.procedureId === targetId);
+                const effectiveForm = overrideFormState ? (overrideFormState[targetId] || {}) : (formState[targetId] || {});
                 const reportContent = {
-                    formData: formState[targetId] || {}, procedureId: targetId,
+                    formData: effectiveForm, procedureId: targetId,
                     procedureType: segmentData?.procedureType || 'generic', segments: segmentData ? [segmentData] : [],
                     selectedImages: segmentData?.selectedImages || [], captures: segmentData?.captures || [],
                     imageCaptions: captionsMap[targetId] || {}, equipment: segmentData?.equipment || [],
@@ -1048,7 +1082,8 @@ export default function ReportPage({
             }));
             allSuccess = results.every(r => r === true);
         } catch (error) { console.error("Failed to save:", error); allSuccess = false; }
-        if (allSuccess) { setIsDirty(false); }
+        if (allSuccess) { setIsDirty(false); setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 3000); }
+        else { setSaveStatus('idle'); }
     };
 
     const handleAutoFill = () => {
@@ -1083,6 +1118,7 @@ export default function ReportPage({
 
     useEffect(() => {
         if (!isDirty) return;
+        setSaveStatus('saving');
         const timer = setTimeout(() => handleSave(false), 5000);
         return () => clearTimeout(timer);
     }, [formState, selectedEquipment, prescriptions, isDirty]);
@@ -1108,28 +1144,38 @@ export default function ReportPage({
                 };
                 return;
             }
-            if (action === 'preview') { setPreviewBlobUrl(URL.createObjectURL(blob as Blob)); setHasPreviewed(true); }
+            if (action === 'preview') {
+                // Open sign modal with the generated blob
+                setSignModalPdfUrl(URL.createObjectURL(blob as Blob));
+                setSignModalGenerating(false);
+                setShowSignModal(true);
+                setHasPreviewed(true);
+            }
         } catch (e) { console.error("PDF Gen Error", e); }
         finally { setIsLoading(false); }
     };
 
-    const handleSignAndFinalize = useCallback(() => {
-        if (isReportEmpty()) {
-            autoFillActionRef.current = 'finalize';
-            setShowAutoFillPopup(true);
-        } else {
-            handleSave(true).then(() => handleGeneratePDF('print'));
-        }
-    }, [isReportEmpty, handleSave, handleGeneratePDF]);
-
-    const handleSaveAndPreview = useCallback(() => {
+    const handleOpenSignModal = useCallback(async () => {
         if (isReportEmpty()) {
             autoFillActionRef.current = 'preview';
             setShowAutoFillPopup(true);
-        } else {
-            handleSave(false).then(() => handleGeneratePDF('preview'));
+            return;
         }
-    }, [isReportEmpty, handleSave, handleGeneratePDF]);
+        // Save first, then open the sign modal with a PDF preview
+        await handleSave(false);
+        setSignModalGenerating(true);
+        setShowSignModal(true);
+        try {
+            const blob = await onGeneratePDF({ patient, doctor, hospital, segments: assembleAllSegmentsData(), footerText } as any);
+            if (blob) setSignModalPdfUrl(URL.createObjectURL(blob as Blob));
+        } catch (e) { console.error('Sign modal PDF error', e); }
+        finally { setSignModalGenerating(false); }
+    }, [isReportEmpty, handleSave, onGeneratePDF, patient, doctor, hospital, assembleAllSegmentsData, footerText]);
+
+    const handleCloseSignModal = () => {
+        setShowSignModal(false);
+        if (signModalPdfUrl) { URL.revokeObjectURL(signModalPdfUrl); setSignModalPdfUrl(null); }
+    };
 
     const handleNavigationAttempt = (action: () => void) => {
         if (isDirty) { setPendingNavigation(() => action); setShowUnsavedModal(true); } else action();
@@ -1187,21 +1233,141 @@ export default function ReportPage({
         </AnimatePresence>
     );
 
-    const EmbeddedPDFModal = () => {
-        if (!previewBlobUrl) return null;
+    // Sign & Finalize split-screen modal
+    const SignFinalizeModal = () => {
+        const [isSigning, setIsSigning] = useState(false);
+
+        const doFinalize = async (print: boolean, goHome: boolean) => {
+            setIsSigning(true);
+            await handleSave(true);
+            if (print) {
+                try {
+                    const blob = await onGeneratePDF({ patient, doctor, hospital, segments: assembleAllSegmentsData(), footerText } as any);
+                    if (blob) {
+                        const url = URL.createObjectURL(blob as Blob);
+                        const pf = document.createElement('iframe');
+                        Object.assign(pf.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: 'none', opacity: '0' });
+                        pf.src = url; document.body.appendChild(pf);
+                        pf.onload = () => { try { pf.contentWindow?.focus(); pf.contentWindow?.print(); } catch (_) { window.open(url, '_blank'); } setTimeout(() => { document.body.removeChild(pf); URL.revokeObjectURL(url); }, 60000); };
+                    }
+                } catch (e) { console.error('Print error', e); }
+            }
+            setIsSigning(false);
+            handleCloseSignModal();
+            if (goHome) onComplete();
+        };
+
         return (
-            <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8">
-                <div className="bg-white w-full h-full max-w-5xl rounded-2xl overflow-hidden flex flex-col">
-                    <div className="h-14 border-b border-zinc-100 flex items-center justify-between px-6">
-                        <div className="flex items-center gap-3"><FileText className="text-blue-600" size={18} /><span className="text-sm font-bold uppercase tracking-tight">Finalized Report</span></div>
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => { URL.revokeObjectURL(previewBlobUrl); setPreviewBlobUrl(null); }} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 flex items-center gap-2"><Check size={14} /> Finish & Return</button>
-                            <button onClick={() => { URL.revokeObjectURL(previewBlobUrl); setPreviewBlobUrl(null); }} className="p-1.5 text-zinc-400 hover:text-zinc-600"><X size={20} /></button>
-                        </div>
-                    </div>
-                    <iframe src={`${previewBlobUrl}#toolbar=0`} className="flex-1 w-full" />
-                </div>
-            </div>
+            <AnimatePresence>
+                {showSignModal && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[150] bg-black/70 backdrop-blur-md flex items-center justify-center p-4"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.96, opacity: 0, y: 16 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.96, opacity: 0, y: 16 }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            className="bg-white rounded-3xl shadow-2xl w-full max-w-7xl h-[95vh] flex overflow-hidden"
+                        >
+                            {/* LEFT — PDF Preview */}
+                            <div className="flex-1 bg-zinc-100 flex flex-col min-w-0">
+                                <div className="h-12 bg-white border-b border-zinc-100 flex items-center px-5 gap-3 shrink-0">
+                                    <FileText size={15} className="text-blue-600" />
+                                    <span className="text-[12px] font-black text-zinc-700 uppercase tracking-tight">Report Preview</span>
+                                    {signModalGenerating && <Loader2 size={13} className="animate-spin text-blue-500 ml-auto" />}
+                                </div>
+                                <div className="flex-1 relative">
+                                    {signModalGenerating && (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-100">
+                                            <Loader2 size={36} className="animate-spin text-blue-500" />
+                                            <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Generating Preview…</p>
+                                        </div>
+                                    )}
+                                    {signModalPdfUrl && !signModalGenerating && (
+                                        <iframe src={`${signModalPdfUrl}#toolbar=0&navpanes=0`} className="w-full h-full border-none" title="Report Preview" />
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* RIGHT — Actions */}
+                            <div className="w-[280px] shrink-0 bg-white border-l border-zinc-100 flex flex-col p-6 gap-5">
+                                {/* Header */}
+                                <div className="flex items-start justify-between">
+                                    <div>
+                                        <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center mb-3 shadow-lg shadow-blue-500/20">
+                                            <FileText size={22} className="text-white" />
+                                        </div>
+                                        <h2 className="text-[18px] font-black text-zinc-900 leading-tight">Sign & Finalise</h2>
+                                        <p className="text-[12px] text-zinc-400 font-medium mt-1">{patient?.fullName || patient?.name}</p>
+                                    </div>
+                                    <button onClick={handleCloseSignModal} className="p-1.5 rounded-xl text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-all ml-2">
+                                        <X size={18} />
+                                    </button>
+                                </div>
+
+                                {/* Status badge */}
+                                <div className="flex items-center gap-2 px-3 py-2.5 bg-amber-50 border border-amber-100 rounded-xl">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                                    <span className="text-[11px] font-bold text-amber-700">Draft — not yet signed</span>
+                                </div>
+
+                                {/* Info */}
+                                <p className="text-[12px] text-zinc-500 leading-relaxed">
+                                    Signing this report marks the procedure as <span className="font-bold text-zinc-700">completed</span> in the patient queue. This action is recorded under your name.
+                                </p>
+
+                                {/* Action buttons */}
+                                <div className="flex flex-col gap-3 mt-auto">
+                                    {/* Edit Report */}
+                                    <button
+                                        onClick={handleCloseSignModal}
+                                        className="w-full h-12 bg-zinc-50 border border-zinc-200 text-zinc-700 rounded-2xl font-bold text-[13px] hover:bg-zinc-100 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+                                    >
+                                        <ArrowLeft size={15} /> Edit Report
+                                    </button>
+
+                                    {/* Sign & Print */}
+                                    <button
+                                        onClick={() => doFinalize(true, false)}
+                                        disabled={isSigning}
+                                        className="w-full h-12 bg-white border-2 border-zinc-900 text-zinc-900 rounded-2xl font-bold text-[13px] hover:bg-zinc-900 hover:text-white transition-all flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50 shadow-sm"
+                                    >
+                                        {isSigning ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
+                                        Sign & Print
+                                    </button>
+
+                                    {/* Sign & Finalise */}
+                                    <button
+                                        onClick={() => doFinalize(false, true)}
+                                        disabled={isSigning}
+                                        className="w-full h-13 py-3.5 bg-blue-700 text-white rounded-2xl font-bold text-[13px] hover:bg-blue-800 transition-all flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-40 shadow-lg shadow-blue-700/25"
+                                    >
+                                        {isSigning ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                                        Sign & Finalise
+                                    </button>
+
+                                    {/* Divider */}
+                                    <div className="relative h-px bg-zinc-100 my-1">
+                                        <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-2 text-[9px] font-bold text-zinc-400 uppercase tracking-widest">or</span>
+                                    </div>
+
+                                    {/* Cancel — goes home without signing */}
+                                    <button
+                                        onClick={() => { handleCloseSignModal(); onComplete(); }}
+                                        className="w-full h-11 text-zinc-400 rounded-2xl font-bold text-[12px] hover:text-rose-500 hover:bg-rose-50 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+                                    >
+                                        <X size={14} /> Cancel — Return to Dashboard
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         );
     };
 
@@ -1215,9 +1381,7 @@ export default function ReportPage({
                             <Wand2 size={40} className="text-blue-400" />
                         </div>
                         <div className="space-y-2">
-                            <h3 className="text-2xl font-semibold tracking-tight text-white">
-                                Report is Empty
-                            </h3>
+                            <h3 className="text-2xl font-semibold tracking-tight text-white">Report is Empty</h3>
                             <p className="text-zinc-400 text-sm font-normal leading-relaxed px-4">
                                 You haven&apos;t filled in any findings. Would you like to auto-fill the report as &quot;Healthy / Normal&quot; before proceeding?
                             </p>
@@ -1225,31 +1389,69 @@ export default function ReportPage({
                         <div className="grid grid-cols-2 gap-4 w-full pt-2">
                             <button onClick={() => {
                                 setShowAutoFillPopup(false);
-                                const isFinalize = autoFillActionRef.current === 'finalize';
-                                handleSave(isFinalize).then(() => handleGeneratePDF(isFinalize ? 'print' : 'preview'));
+                                // Skip autofill — open sign modal with current (empty) state
+                                handleOpenSignModal();
                             }} className="h-14 rounded-2xl bg-white/5 border border-white/10 text-white text-xs font-bold uppercase tracking-wider hover:bg-white/10 transition-all">
                                 No, Continue Empty
                             </button>
-                            <button onClick={() => {
+                             <button onClick={async () => {
                                 setShowAutoFillPopup(false);
-                                const isFinalize = autoFillActionRef.current === 'finalize';
-                                // Use flushSync to force synchronous state update so
-                                // assembleAllSegmentsData() reads the new auto-filled values
+                                // Build new form state for all segments WITHOUT relying on React state commit
+                                const newFormState: Record<string, any> = {};
+                                segments.forEach((seg: any) => {
+                                    const type = proceduresData[seg.id]?.type || 'generic';
+                                    const template = resolveTemplate(type);
+                                    const normalValues = getNormalValues(template ? template.id : type);
+                                    let newForm = { ...(formState[seg.id] || {}) };
+                                    if (normalValues) newForm = { ...newForm, ...normalValues };
+                                    template?.sections.forEach((s: any) => s.fields.forEach((f: any) => { if ((f as any).default && !newForm[f.id]) newForm[f.id] = (f as any).default; }));
+                                    newFormState[seg.id] = newForm;
+                                });
+                                // Commit to React state
                                 flushSync(() => {
-                                    segments.forEach((seg: any) => {
-                                        const type = proceduresData[seg.id]?.type || 'generic';
-                                        const template = resolveTemplate(type);
-                                        const normalValues = getNormalValues(template ? template.id : type);
-                                        if (!template && !normalValues) return;
-                                        let newForm = { ...(formState[seg.id] || {}) };
-                                        if (normalValues) newForm = { ...newForm, ...normalValues };
-                                        template?.sections.forEach((s: any) => s.fields.forEach((f: any) => { if ((f as any).default && !newForm[f.id]) newForm[f.id] = (f as any).default; }));
-                                        setFormState(prev => ({ ...prev, [seg.id]: newForm }));
-                                    });
+                                    setFormState(prev => ({ ...prev, ...newFormState }));
                                     setIsDirty(true);
                                 });
-                                // Now state is committed — save and generate PDF
-                                handleSave(isFinalize).then(() => handleGeneratePDF(isFinalize ? 'print' : 'preview'));
+                                // Save with the computed newFormState (bypasses stale closure)
+                                await handleSave(false, undefined, newFormState);
+
+                                // Build segments data INLINE from newFormState — never trust the stale useCallback
+                                const segmentsForPDF = segments.map((seg: any) => {
+                                    const pid = seg.id;
+                                    const pType = proceduresData[pid]?.type || 'generic';
+                                    const rawForm = newFormState[pid] || {};
+                                    const structure = resolveTemplate(pType)?.sections || [];
+                                    const printableSections = structure.map((sect: any) => ({
+                                        title: sect.title,
+                                        items: sect.fields.map((f: any) => {
+                                            let val = rawForm[f.id];
+                                            if (f.type === 'bilateral' && val) val = `R: ${val.right || '—'} | L: ${val.left || '—'}`;
+                                            else if (Array.isArray(val)) val = val.join(', ');
+                                            return { label: f.label, value: val, type: f.type, rawValue: rawForm[f.id] };
+                                        })
+                                    }));
+                                    const media = mediaCache[pid] || [];
+                                    const selIds = selectedImagesMap[pid] || [];
+                                    const selectedImages = Array.from(new Set(selIds)).map((id: string) => {
+                                        const m = media.find((x: any) => x.id === id);
+                                        return { url: m?.url, caption: captionsMap[pid]?.[id] || '', scopeShape: m?.scopeShape || null };
+                                    }).filter((img: any) => img.url);
+                                    return {
+                                        procedureId: pid, procedureType: pType, title: resolveTemplate(pType)?.name || 'Report',
+                                        formData: { printableSections }, selectedImages,
+                                        imageCaptions: captionsMap[pid] || {}, captures: media,
+                                        equipment: selectedEquipment[pid]?.map((id: string) => availableEquipment.find((e: any) => e.id === id)).filter(Boolean) || [],
+                                        prescriptions: prescriptions[pid] || []
+                                    };
+                                });
+
+                                setSignModalGenerating(true);
+                                setShowSignModal(true);
+                                try {
+                                    const blob = await onGeneratePDF({ patient, doctor, hospital, segments: segmentsForPDF, footerText } as any);
+                                    if (blob) setSignModalPdfUrl(URL.createObjectURL(blob as Blob));
+                                } catch (e) { console.error('AutoFill PDF error', e); }
+                                finally { setSignModalGenerating(false); }
                             }} className="h-14 rounded-2xl bg-emerald-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-emerald-500 transition-all">
                                 Yes, Auto-Fill Normal
                             </button>
@@ -1277,7 +1479,7 @@ export default function ReportPage({
     return (
         <div className="flex h-screen bg-[#f5f5f5] overflow-hidden relative">
             <UnsavedChangesModal />
-            <EmbeddedPDFModal />
+            <SignFinalizeModal />
             <AutoFillEmptyModal />
 
             {/* Non-blocking loading overlay */}
@@ -1458,19 +1660,37 @@ export default function ReportPage({
                     </div>
 
                     {/* Report actions */}
-                    <div className="border-t border-zinc-100 pt-6 space-y-4">
-                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em] block">Report Actions</span>
+                    <div className="border-t border-zinc-100 pt-6 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em]">Report Actions</span>
+                            {/* Auto-save status pill */}
+                            {saveStatus === 'saving' && (
+                                <span className="flex items-center gap-1 text-[9px] font-bold text-blue-500 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
+                                    <Loader2 size={8} className="animate-spin" /> Saving…
+                                </span>
+                            )}
+                            {saveStatus === 'saved' && (
+                                <span className="flex items-center gap-1 text-[9px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                                    <Check size={8} strokeWidth={3} /> Saved
+                                </span>
+                            )}
+                            {saveStatus === 'idle' && isDirty && (
+                                <span className="flex items-center gap-1 text-[9px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                                    ● Unsaved
+                                </span>
+                            )}
+                        </div>
+
                         <button onClick={handleAutoFill} disabled={isGeneric}
-                            className="w-full py-4 bg-blue-50 text-blue-600 rounded-xl font-bold text-[13px] hover:bg-blue-100 hover:text-blue-700 transition-all flex items-center justify-center gap-2 border border-blue-100 disabled:opacity-50 disabled:grayscale shadow-sm">
+                            className="w-full py-3.5 bg-blue-50 text-blue-600 rounded-xl font-bold text-[13px] hover:bg-blue-100 hover:text-blue-700 transition-all flex items-center justify-center gap-2 border border-blue-100 disabled:opacity-50 disabled:grayscale shadow-sm">
                             <Wand2 size={16} /> Auto-Fill Normal
                         </button>
-                        <button onClick={handleSaveAndPreview}
-                            className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-[13px] hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/30 flex items-center justify-center gap-2">
-                            <Eye size={16} /> Save and Preview
-                        </button>
-                        <button onClick={handleSignAndFinalize}
-                            className="w-full py-4 bg-zinc-900 text-white rounded-xl font-bold text-[13px] hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-900/20 flex items-center justify-center gap-2">
-                            <Printer size={16} /> Sign and Finalize
+
+                        <button
+                            onClick={handleOpenSignModal}
+                            className="w-full py-4 bg-blue-700 text-white rounded-xl font-bold text-[13px] hover:bg-blue-800 transition-all shadow-lg shadow-blue-700/25 flex items-center justify-center gap-2 active:scale-[0.98]"
+                        >
+                            <FileText size={16} /> Sign &amp; Preview
                         </button>
                     </div>
 
