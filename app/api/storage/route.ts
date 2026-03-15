@@ -22,18 +22,58 @@ async function getDrives() {
         }
         return drives;
     } else {
-        // Linux / Raspberry Pi: Look in /media/pi
-        const mediaPath = '/media/pi';
-        try {
-            const mounts = await readdir(mediaPath);
-            return mounts.map(m => ({
-                name: m,
-                path: path.join(mediaPath, m),
-                type: 'drive'
-            }));
-        } catch (e) {
-            return [];
+        // Linux / Raspberry Pi: Look in common mount points
+        const potentialRoots = ['/media', '/run/media', '/mnt'];
+        const drives = [];
+
+        for (const root of potentialRoots) {
+            try {
+                if (!fs.existsSync(root)) continue;
+                const entries = await readdir(root);
+                
+                for (const entry of entries) {
+                    const fullPath = path.join(root, entry);
+                    try {
+                        const stats = await stat(fullPath);
+                        if (stats.isDirectory()) {
+                            // If it's a directory in /media, /mnt etc, it's likely a drive or a user folder containing drives
+                            drives.push({
+                                name: entry,
+                                path: fullPath,
+                                type: 'drive'
+                            });
+
+                            // Optimization: if it's a user folder like /media/pi, check inside it immediately
+                            // to save the user a click, but also keep the folder itself.
+                            if (root === '/media' || root === '/run/media') {
+                                try {
+                                    const subEntries = await readdir(fullPath);
+                                    for (const subEntry of subEntries) {
+                                        const subPath = path.join(fullPath, subEntry);
+                                        const subStats = await stat(subPath);
+                                        if (subStats.isDirectory()) {
+                                            drives.push({
+                                                name: `${entry}/${subEntry}`,
+                                                path: subPath,
+                                                type: 'drive'
+                                            });
+                                        }
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                    } catch (e) {}
+                }
+            } catch (e) {}
         }
+        
+        // De-duplicate by path
+        const seen = new Set();
+        return drives.filter(d => {
+            if (seen.has(d.path)) return false;
+            seen.add(d.path);
+            return true;
+        });
     }
 }
 
