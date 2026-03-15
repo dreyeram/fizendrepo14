@@ -10,6 +10,7 @@ import {
 import { searchPatients } from "@/app/actions/auth";
 import { getSystemStatus } from "@/app/actions/system";
 import { cn } from "@/lib/utils";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 const COUNTRY_DATA = [
     { code: "IN", dialCode: "+91", flag: "🇮🇳", name: "India", length: 10 },
@@ -58,9 +59,9 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
     const [importProgress, setImportProgress] = useState(0);
     const [isSuccess, setIsSuccess] = useState(false);
     const [errors, setErrors] = useState<Record<string, string>>({});
-
-    // File Input Ref
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    
+    // File Picker State
+    const [isPickerOpen, setIsPickerOpen] = useState(false);
 
     // Check USB on Mount/Open
     useEffect(() => {
@@ -83,27 +84,24 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
     };
 
     // --- FILE HANDLING ---
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!usbConnected) return;
+    const handleFilesSelected = (files: File[]) => {
+        if (!usbConnected || files.length === 0) return;
         
-        if (e.target.files && e.target.files.length > 0) {
-            const newFiles = Array.from(e.target.files);
-            const newPreviews = newFiles.map(f => {
-                const type = f.type.startsWith('video/') ? 'video' : 'image';
-                return {
-                    file: f,
-                    url: URL.createObjectURL(f),
-                    selected: true,
-                    type: type as 'image' | 'video'
-                };
-            });
+        const newPreviews = files.map(f => {
+            const type = f.type.startsWith('video/') || f.name.match(/\.(mp4|webm|mov|avi)$/i) ? 'video' : 'image';
+            return {
+                file: f,
+                url: URL.createObjectURL(f),
+                selected: true,
+                type: type as 'image' | 'video'
+            };
+        });
 
-            setPreviews(prev => [...prev, ...newPreviews]);
-            if (newPreviews.some(p => p.type === 'video') && !newPreviews.some(p => p.type === 'image')) {
-                setActiveMediaTab('videos');
-            } else {
-                setActiveMediaTab('images');
-            }
+        setPreviews(prev => [...prev, ...newPreviews]);
+        if (newPreviews.some(p => p.type === 'video') && !newPreviews.some(p => p.type === 'image')) {
+            setActiveMediaTab('videos');
+        } else {
+            setActiveMediaTab('images');
         }
     };
 
@@ -366,7 +364,7 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
 
                             {/* Browse Button */}
                             <button
-                                onClick={() => usbConnected && fileInputRef.current?.click()}
+                                onClick={() => usbConnected && setIsPickerOpen(true)}
                                 disabled={!usbConnected}
                                 className={cn(
                                     "w-full h-14 rounded-[20px] flex items-center justify-center gap-3 font-black text-xs uppercase tracking-[0.2em] transition-all active:scale-95 mb-8",
@@ -377,14 +375,6 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
                             >
                                 <UploadCloud size={18} />
                                 Browse Files
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    className="hidden"
-                                    multiple
-                                    accept="image/*,video/*"
-                                    onChange={handleFileSelect}
-                                />
                             </button>
 
                             {/* Media Tabs & Grid */}
@@ -796,6 +786,15 @@ export default function ImportWizardModal({ isOpen, onClose, onFinish }: ImportW
                     </motion.div>
                 </div>
             )}
+            
+            <USBFilePicker 
+                isOpen={isPickerOpen}
+                onClose={() => setIsPickerOpen(false)}
+                onFilesSelected={handleFilesSelected}
+                title="Import Media"
+                accept="image/*,video/*"
+                multiple
+            />
         </AnimatePresence>
     );
 }

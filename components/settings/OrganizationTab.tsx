@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Building2, Camera, MapPin, Phone, Mail, Save, Loader2, Check, AlertCircle } from "lucide-react";
 import { getOrganizationSettings, updateOrganizationSettings } from "@/app/actions/settings";
 import { motion } from "framer-motion";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface OrganizationTabProps {
     orgId: string;
@@ -26,7 +27,7 @@ export default function OrganizationTab({ orgId, onUpdate }: OrganizationTabProp
     const [loading, setLoading] = useState(true);
     const [message, setMessage] = useState({ text: "", type: "" });
 
-    const logoInputRef = useRef<HTMLInputElement>(null);
+    const [isLogoPickerOpen, setIsLogoPickerOpen] = useState(false);
 
     useEffect(() => {
         if (orgId) {
@@ -48,8 +49,8 @@ export default function OrganizationTab({ orgId, onUpdate }: OrganizationTabProp
         setLoading(false);
     };
 
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleLogoSelected = async (files: File[]) => {
+        const file = files[0];
         if (!file) return;
 
         const reader = new FileReader();
@@ -121,18 +122,11 @@ export default function OrganizationTab({ orgId, onUpdate }: OrganizationTabProp
                     </div>
                     <button
                         type="button"
-                        onClick={() => logoInputRef.current?.click()}
+                        onClick={() => setIsLogoPickerOpen(true)}
                         className="absolute -right-2 -bottom-2 w-8 h-8 bg-white shadow-md rounded-lg flex items-center justify-center text-slate-600 hover:text-blue-600 hover:scale-110 active:scale-95 transition-all"
                     >
                         <Camera size={16} />
                     </button>
-                    <input
-                        type="file"
-                        ref={logoInputRef}
-                        className="hidden"
-                        accept="image/*"
-                        onChange={handleFileUpload}
-                    />
                 </div>
                 <div>
                     <h3 className="text-lg font-bold text-slate-900">{name || "Clinic/Hospital Name"}</h3>
@@ -219,6 +213,14 @@ export default function OrganizationTab({ orgId, onUpdate }: OrganizationTabProp
                 {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
                 {isSaving ? "Saving..." : "Save Organization Changes"}
             </button>
+            
+            <USBFilePicker 
+                isOpen={isLogoPickerOpen}
+                onClose={() => setIsLogoPickerOpen(false)}
+                onFilesSelected={handleLogoSelected}
+                title="Select Organization Logo"
+                accept="image/*"
+            />
         </form>
     );
 }

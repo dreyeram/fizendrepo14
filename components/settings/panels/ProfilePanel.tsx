@@ -4,6 +4,7 @@ import React, { useState, useRef } from "react";
 import { User, Mail, Phone, Camera, Save, Upload, Trash2, Briefcase, Check, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { updateUserProfile } from "@/app/actions/settings";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface UserData {
     id: string;
@@ -24,7 +25,7 @@ export default function ProfilePanel({ user, onUpdate, onUnsavedChange }: Profil
     const [isSaving, setIsSaving] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
     const [saveError, setSaveError] = useState('');
-    const signatureInputRef = useRef<HTMLInputElement>(null);
+    const [isSignaturePickerOpen, setIsSignaturePickerOpen] = useState(false);
 
     const contactInfo = user.contactDetails ? JSON.parse(user.contactDetails) : {};
     const [signaturePreview, setSignaturePreview] = useState<string | null>(user.signaturePath || null);
@@ -99,8 +100,8 @@ export default function ProfilePanel({ user, onUpdate, onUnsavedChange }: Profil
         }
     };
 
-    const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleSignatureSelected = (files: File[]) => {
+        const file = files[0];
         if (file) {
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -287,21 +288,14 @@ export default function ProfilePanel({ user, onUpdate, onUnsavedChange }: Profil
 
                             {/* Upload */}
                             <div>
-                                <input
-                                    ref={signatureInputRef}
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={handleSignatureChange}
-                                    className="hidden"
-                                    id="signature-upload"
-                                />
-                                <label
-                                    htmlFor="signature-upload"
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSignaturePickerOpen(true)}
                                     className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-semibold text-sm text-slate-700 cursor-pointer transition-colors"
                                 >
                                     <Upload size={16} />
                                     Upload Signature
-                                </label>
+                                </button>
                                 <p className="text-[10px] text-slate-400 mt-2">PNG/JPG, transparent background recommended</p>
                             </div>
                         </div>
@@ -347,6 +341,14 @@ export default function ProfilePanel({ user, onUpdate, onUnsavedChange }: Profil
                     {isSaving ? 'Saving...' : 'Save Changes'}
                 </button>
             </div>
+            
+            <USBFilePicker 
+                isOpen={isSignaturePickerOpen}
+                onClose={() => setIsSignaturePickerOpen(false)}
+                onFilesSelected={handleSignatureSelected}
+                title="Select Signature"
+                accept="image/*"
+            />
         </div>
     );
 }

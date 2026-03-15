@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { User, Mail, Phone, Camera, Save, X, Edit3, Shield, Building2, KeyRound, Lock, Check, Upload, Pencil, Trash2, Briefcase } from "lucide-react";
 import { motion } from "framer-motion";
 import { updateUserProfile, setDangerZonePin, hasDangerZonePin } from "@/app/actions/settings";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface UserData {
     id: string;
@@ -29,7 +30,7 @@ interface ProfileSettingsProps {
 export default function ProfileSettings({ user, onUpdate, onClose }: ProfileSettingsProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const signatureInputRef = useRef<HTMLInputElement>(null);
+    const [isSignaturePickerOpen, setIsSignaturePickerOpen] = useState(false);
 
     // PIN state
     const [hasPin, setHasPin] = useState(false);
@@ -90,8 +91,8 @@ export default function ProfileSettings({ user, onUpdate, onClose }: ProfileSett
         }
     };
 
-    const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleSignatureSelected = (files: File[]) => {
+        const file = files[0];
         if (file) {
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -340,21 +341,14 @@ export default function ProfileSettings({ user, onUpdate, onClose }: ProfileSett
                                     {/* Upload Button */}
                                     {isEditing && (
                                         <div>
-                                            <input
-                                                ref={signatureInputRef}
-                                                type="file"
-                                                accept="image/*"
-                                                onChange={handleSignatureChange}
-                                                className="hidden"
-                                                id="signature-upload"
-                                            />
-                                            <label
-                                                htmlFor="signature-upload"
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsSignaturePickerOpen(true)}
                                                 className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-semibold text-sm text-slate-700 cursor-pointer transition-colors"
                                             >
                                                 <Upload size={16} />
                                                 Upload Signature
-                                            </label>
+                                            </button>
                                             <p className="text-[10px] text-slate-400 mt-1">PNG/JPG, transparent background recommended</p>
                                         </div>
                                     )}
@@ -482,7 +476,14 @@ export default function ProfileSettings({ user, onUpdate, onClose }: ProfileSett
                     </button>
                 </div>
             </motion.div>
+            
+            <USBFilePicker 
+                isOpen={isSignaturePickerOpen}
+                onClose={() => setIsSignaturePickerOpen(false)}
+                onFilesSelected={handleSignatureSelected}
+                title="Select Signature"
+                accept="image/*"
+            />
         </div>
     );
 }
-

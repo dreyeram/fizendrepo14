@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Database, Download, Upload, HardDrive, Trash2, RefreshCw, FileJson, FileSpreadsheet, Check, AlertCircle, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface DataPanelProps {
     userId: string;
@@ -52,6 +53,7 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
     const [isClearing, setIsClearing] = useState(false);
     const [exportSuccess, setExportSuccess] = useState('');
     const [exportError, setExportError] = useState('');
+    const [isImportPickerOpen, setIsImportPickerOpen] = useState(false);
 
     // Simulated storage usage (would come from server in production)
     const storageUsed = 2.4; // GB
@@ -108,6 +110,16 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
         } finally {
             setIsExporting(false);
         }
+    };
+
+    const handleImportSelected = async (files: File[]) => {
+        const file = files[0];
+        if (!file) return;
+
+        // Implementation for data import would go here
+        // For now just show a not implemented message
+        setExportError('Data import from file is not fully implemented yet.');
+        setTimeout(() => setExportError(''), 4000);
     };
 
     const handleClearCache = async () => {
@@ -261,12 +273,14 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
                 </div>
 
                 <div className="p-6">
-                    <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 hover:bg-slate-100 cursor-pointer transition-colors">
+                    <button 
+                        onClick={() => setIsImportPickerOpen(true)}
+                        className="w-full flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 hover:bg-slate-100 cursor-pointer transition-colors"
+                    >
                         <Upload size={32} className="text-slate-400 mb-2" />
-                        <p className="font-bold text-sm text-slate-700">Drop backup file here</p>
-                        <p className="text-[10px] text-slate-500 mt-1">or click to browse (JSON only)</p>
-                        <input type="file" accept=".json" className="hidden" />
-                    </label>
+                        <p className="font-bold text-sm text-slate-700">Select backup file to import</p>
+                        <p className="text-[10px] text-slate-500 mt-1">(JSON only)</p>
+                    </button>
                     <p className="text-xs text-slate-400 mt-3 text-center">
                         ⚠️ Import will merge with existing data. Duplicates will be skipped.
                     </p>
@@ -297,6 +311,14 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
                     </button>
                 </div>
             </div>
+            
+            <USBFilePicker 
+                isOpen={isImportPickerOpen}
+                onClose={() => setIsImportPickerOpen(false)}
+                onFilesSelected={handleImportSelected}
+                title="Select Backup to Import"
+                accept=".json"
+            />
         </div>
     );
 }

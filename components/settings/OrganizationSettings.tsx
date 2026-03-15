@@ -4,6 +4,7 @@ import React, { useState, useRef } from "react";
 import { Building2, Camera, Save, X, Upload, Image as ImageIcon, Trash2, MapPin, Phone, Mail } from "lucide-react";
 import { motion } from "framer-motion";
 import { updateOrganizationSettings } from "@/app/actions/settings";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface Organization {
     id: string;
@@ -30,7 +31,7 @@ export default function OrganizationSettings({ organization, onUpdate, onClose }
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [logoPreview, setLogoPreview] = useState<string | null>(organization.logoPath || null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isLogoPickerOpen, setIsLogoPickerOpen] = useState(false);
 
     // Parse letterheadConfig for additional fields
     const letterheadData = organization.letterheadConfig ? JSON.parse(organization.letterheadConfig) : {};
@@ -43,8 +44,8 @@ export default function OrganizationSettings({ organization, onUpdate, onClose }
         phone: letterheadData.phone || '',
     });
 
-    const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleLogoSelected = (files: File[]) => {
+        const file = files[0];
         if (file) {
             // For now, create a data URL for preview
             // In production, this would upload to a storage service
@@ -58,9 +59,6 @@ export default function OrganizationSettings({ organization, onUpdate, onClose }
 
     const handleRemoveLogo = () => {
         setLogoPreview(null);
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-        }
     };
 
     const handleSave = async () => {
@@ -146,21 +144,14 @@ export default function OrganizationSettings({ organization, onUpdate, onClose }
 
                                 {isEditing && (
                                     <div className="flex-1">
-                                        <input
-                                            ref={fileInputRef}
-                                            type="file"
-                                            accept="image/*"
-                                            onChange={handleLogoChange}
-                                            className="hidden"
-                                            id="logo-upload"
-                                        />
-                                        <label
-                                            htmlFor="logo-upload"
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsLogoPickerOpen(true)}
                                             className="inline-flex items-center gap-3 px-6 py-3 bg-white hover:bg-blue-50 text-blue-600 border border-blue-100 rounded-xl font-semibold text-[11px] uppercase tracking-wider cursor-pointer transition-all shadow-sm active:scale-95"
                                         >
                                             <Upload size={16} className="stroke-[2.5]" />
                                             Upload Asset
-                                        </label>
+                                        </button>
                                         <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider mt-3 leading-loose">
                                             PNG, SVG preferred<br />Max 2.0 MB resolution
                                         </p>
@@ -331,6 +322,14 @@ export default function OrganizationSettings({ organization, onUpdate, onClose }
                     </div>
                 </div>
             </div>
+            
+            <USBFilePicker 
+                isOpen={isLogoPickerOpen}
+                onClose={() => setIsLogoPickerOpen(false)}
+                onFilesSelected={handleLogoSelected}
+                title="Select Organization Logo"
+                accept="image/*"
+            />
         </div>
     );
 }

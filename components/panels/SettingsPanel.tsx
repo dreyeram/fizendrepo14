@@ -13,6 +13,7 @@ import {
 import { useSettings, ProcedureToolSettings, defaultProcedureTools } from "@/contexts/SettingsContext";
 import { updateUserProfile, updateOrganizationSettings } from "@/app/actions/settings";
 import { exportPatientsCSV, exportSettingsBackup, getExportStatistics } from "@/app/actions/export";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 // Settings Section Types
 type SettingsSection = 'profile' | 'organization' | 'communication' | 'procedure-tools' | 'scope-settings' | 'appearance' | 'shortcuts' | 'data';
@@ -317,6 +318,7 @@ function ProfileSection({ user, showToast, onUpdate }: { user: SettingsPanelProp
 function OrganizationSection({ organization, showToast, onUpdate }: { organization?: SettingsPanelProps['organization']; showToast: (type: 'success' | 'error', msg: string) => void; onUpdate?: () => void }) {
     const [orgName, setOrgName] = useState(organization?.name || '');
     const [isSaving, setIsSaving] = useState(false);
+    const [isLogoPickerOpen, setIsLogoPickerOpen] = useState(false);
 
     const handleSaveOrg = async () => {
         if (!organization?.id) return;
@@ -359,13 +361,21 @@ function OrganizationSection({ organization, showToast, onUpdate }: { organizati
                             )}
                         </div>
                         <div>
-                            <input
-                                type="file"
-                                id="logo-upload"
-                                className="hidden"
-                                accept="image/*"
-                                onChange={async (e) => {
-                                    const file = e.target.files?.[0];
+                            <button
+                                onClick={() => setIsLogoPickerOpen(true)}
+                                disabled={isSaving}
+                                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 flex items-center gap-2 disabled:opacity-50"
+                            >
+                                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                                Upload Logo
+                            </button>
+                            <p className="text-xs text-slate-400 mt-2">Recommended: 200x200px, PNG</p>
+                            
+                            <USBFilePicker 
+                                isOpen={isLogoPickerOpen}
+                                onClose={() => setIsLogoPickerOpen(false)}
+                                onFilesSelected={async (files) => {
+                                    const file = files[0];
                                     if (!file || !organization?.id) return;
 
                                     const reader = new FileReader();
@@ -391,16 +401,9 @@ function OrganizationSection({ organization, showToast, onUpdate }: { organizati
                                     };
                                     reader.readAsDataURL(file);
                                 }}
+                                title="Select Clinic Logo"
+                                accept="image/*"
                             />
-                            <button
-                                onClick={() => document.getElementById('logo-upload')?.click()}
-                                disabled={isSaving}
-                                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 flex items-center gap-2 disabled:opacity-50"
-                            >
-                                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                                Upload Logo
-                            </button>
-                            <p className="text-xs text-slate-400 mt-2">Recommended: 200x200px, PNG</p>
                         </div>
                     </div>
                 </div>

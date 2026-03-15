@@ -5,6 +5,7 @@ import { Building2, Upload, Trash2, MapPin, Phone, Mail, Globe, Save, Check, Ale
 import { motion, AnimatePresence } from "framer-motion";
 import { updateOrganizationSettings } from "@/app/actions/settings";
 import { resolveImageUrl } from "@/lib/utils/image";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface Organization {
     id: string;
@@ -24,7 +25,7 @@ export default function OrganizationPanel({ organization, onUpdate, onUnsavedCha
     const [isSaving, setIsSaving] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
     const [saveError, setSaveError] = useState('');
-    const logoInputRef = useRef<HTMLInputElement>(null);
+    const [isLogoPickerOpen, setIsLogoPickerOpen] = useState(false);
 
     const letterheadData = organization.letterheadConfig ? JSON.parse(organization.letterheadConfig) : {};
 
@@ -43,8 +44,8 @@ export default function OrganizationPanel({ organization, onUpdate, onUnsavedCha
         onUnsavedChange(true);
     };
 
-    const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleLogoSelected = (files: File[]) => {
+        const file = files[0];
         if (file) {
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -134,21 +135,14 @@ export default function OrganizationPanel({ organization, onUpdate, onUnsavedCha
                                 Supported formats: JPG, PNG.
                             </p>
 
-                            <input
-                                ref={logoInputRef}
-                                type="file"
-                                accept="image/*"
-                                onChange={handleLogoChange}
-                                className="hidden"
-                                id="logo-upload"
-                            />
-                            <label
-                                htmlFor="logo-upload"
+                            <button
+                                type="button"
+                                onClick={() => setIsLogoPickerOpen(true)}
                                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-xl font-bold text-sm cursor-pointer transition-colors border border-blue-200"
                             >
                                 <Upload size={16} />
                                 Choose File
-                            </label>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -318,6 +312,14 @@ export default function OrganizationPanel({ organization, onUpdate, onUnsavedCha
                     {isSaving ? 'Saving...' : 'Save Changes'}
                 </button>
             </div>
+            
+            <USBFilePicker 
+                isOpen={isLogoPickerOpen}
+                onClose={() => setIsLogoPickerOpen(false)}
+                onFilesSelected={handleLogoSelected}
+                title="Select Organization Logo"
+                accept="image/*"
+            />
         </div>
     );
 }

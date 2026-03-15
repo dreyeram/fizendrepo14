@@ -4,6 +4,7 @@ import React, { useState, useRef } from "react";
 import { User, Camera, FileText, Check, Loader2, Save, AlertCircle } from "lucide-react";
 import { updateUserProfile } from "@/app/actions/settings";
 import { motion } from "framer-motion";
+import USBFilePicker from "@/components/ui/USBFilePicker";
 
 interface ProfileTabProps {
     user: any;
@@ -27,11 +28,11 @@ export default function ProfileTab({ user, onUpdate }: ProfileTabProps) {
     const [cameraResolution, setCameraResolution] = useState(contactInfo.cameraResolution || '1080p');
     const [printQuality, setPrintQuality] = useState(contactInfo.printQuality || 'Medium');
 
-    const profileInputRef = useRef<HTMLInputElement>(null);
-    const signatureInputRef = useRef<HTMLInputElement>(null);
+    const [isProfilePickerOpen, setIsProfilePickerOpen] = useState(false);
+    const [isSignaturePickerOpen, setIsSignaturePickerOpen] = useState(false);
 
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: "PROFILE_PICTURE" | "SIGNATURE") => {
-        const file = e.target.files?.[0];
+    const handleFilesSelected = async (files: File[], type: "PROFILE_PICTURE" | "SIGNATURE") => {
+        const file = files[0];
         if (!file) return;
 
         const reader = new FileReader();
@@ -101,18 +102,11 @@ export default function ProfileTab({ user, onUpdate }: ProfileTabProps) {
                     </div>
                     <button
                         type="button"
-                        onClick={() => profileInputRef.current?.click()}
+                        onClick={() => setIsProfilePickerOpen(true)}
                         className="absolute -right-2 -bottom-2 w-10 h-10 bg-white shadow-lg rounded-xl flex items-center justify-center text-slate-600 hover:text-blue-600 hover:scale-110 active:scale-95 transition-all"
                     >
                         <Camera size={20} />
                     </button>
-                    <input
-                        type="file"
-                        ref={profileInputRef}
-                        className="hidden"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, "PROFILE_PICTURE")}
-                    />
                 </div>
                 <div>
                     <h3 className="text-lg font-bold text-slate-900">{fullName || "Your Name"}</h3>
@@ -175,7 +169,7 @@ export default function ProfileTab({ user, onUpdate }: ProfileTabProps) {
             <div className="group">
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Digital Signature</label>
                 <div
-                    onClick={() => signatureInputRef.current?.click()}
+                    onClick={() => setIsSignaturePickerOpen(true)}
                     className="relative w-full h-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center cursor-pointer hover:bg-slate-100/50 hover:border-blue-300 transition-all overflow-hidden"
                 >
                     {signature ? (
@@ -189,13 +183,6 @@ export default function ProfileTab({ user, onUpdate }: ProfileTabProps) {
                     <button type="button" className="absolute top-2 right-2 p-1.5 bg-white shadow-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
                         <Camera size={14} className="text-slate-500" />
                     </button>
-                    <input
-                        type="file"
-                        ref={signatureInputRef}
-                        className="hidden"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, "SIGNATURE")}
-                    />
                 </div>
             </div>
 
@@ -219,6 +206,22 @@ export default function ProfileTab({ user, onUpdate }: ProfileTabProps) {
                 {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
                 {isSaving ? "Saving..." : "Save Profile Changes"}
             </button>
+            
+            <USBFilePicker 
+                isOpen={isProfilePickerOpen}
+                onClose={() => setIsProfilePickerOpen(false)}
+                onFilesSelected={(files) => handleFilesSelected(files, "PROFILE_PICTURE")}
+                title="Select Profile Picture"
+                accept="image/*"
+            />
+            
+            <USBFilePicker 
+                isOpen={isSignaturePickerOpen}
+                onClose={() => setIsSignaturePickerOpen(false)}
+                onFilesSelected={(files) => handleFilesSelected(files, "SIGNATURE")}
+                title="Select Signature"
+                accept="image/*"
+            />
         </form>
     );
 }
