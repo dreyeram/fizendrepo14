@@ -287,7 +287,7 @@ const DraggableImageGallery = ({ imageIds, mediaCache, captionsMap, onReorder, o
     );
 
     const allMedia: any[] = useMemo(
-        () => (mediaCache || []).filter((m: any) => (m.url || m.base64) && m.type !== 'video'),
+        () => (mediaCache || []).filter((m: any) => (m.url || m.base64) && m.type !== 'video' && !m.deleted),
         [mediaCache]
     );
 
@@ -805,6 +805,7 @@ interface ReportPageProps {
     onSave: (data: any, action?: string) => Promise<Blob | void | undefined>;
     onGeneratePDF: (data: any, action?: string) => Promise<Blob | undefined>;
     onSaveSuccess?: () => void;
+    initialSelectedIds?: string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -812,7 +813,8 @@ interface ReportPageProps {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ReportPage({
     patient, doctor, hospital, captures = [],
-    onBack, onBackToAnnotate, onComplete, onSave, onGeneratePDF, onSaveSuccess
+    onBack, onBackToAnnotate, onComplete, onSave, onGeneratePDF, onSaveSuccess,
+    initialSelectedIds
 }: ReportPageProps) {
     const { segments, setActiveSegment } = useSessionStore();
 
@@ -847,6 +849,14 @@ export default function ReportPage({
 
     const [footerText, setFooterText] = useState("");
     const [footerOptions, setFooterOptions] = useState<string[]>([]);
+
+    const visibleSegments = useMemo(() => {
+        return segments.filter(seg => {
+            const hasMedia = (mediaCache[seg.id] || []).some((m: any) => !m.deleted);
+            const hasSelections = (selectedImagesMap[seg.id] || []).length > 0;
+            return hasMedia || hasSelections;
+        });
+    }, [segments, mediaCache, selectedImagesMap]);
 
     useEffect(() => {
         try {
@@ -988,24 +998,31 @@ export default function ReportPage({
                 }
 
                 // ── Compute final default selections for ALL procedures ──
-                // This ensures "max 4" and "annotated priority" throughout all segments.
                 const allPidKeys = Array.from(new Set([...segments.map((s: any) => s.id), ...Object.keys(pData)]));
                 allPidKeys.forEach(pid => {
-                    // Only compute defaults if NO images were recovered from a saved report
-                    if (!sImages[pid] || sImages[pid].length === 0) {
-                        const media = (mCache[pid] || []).filter((m: any) => m.type !== 'video');
-                        // Prioritize: 'report' (annotated) first, then others.
-                        // Stable sort preserves chronological order (latest captured first).
-                        const sorted = [...media].sort((a, b) => {
-                            if (a.category === 'report' && b.category !== 'report') return -1;
-                            if (a.category !== 'report' && b.category === 'report') return 1;
-                            return 0;
-                        });
-                        sImages[pid] = sorted.slice(0, 4).map(m => m.id);
-                    } else {
-                        // Even if pre-selected (from save), ensure we respect the unique IDs
+                    // 1. If images were recovered from a saved report, keep them
+                    if (sImages[pid] && sImages[pid].length > 0) {
                         sImages[pid] = Array.from(new Set(sImages[pid]));
+                        return;
                     }
+
+                    // 2. If manual selections were passed from the annotation suite, respect them
+                    if (Array.isArray(initialSelectedIds) && initialSelectedIds.length > 0) {
+                        const belongsToThisProc = (mCache[pid] || []).filter((m: any) => initialSelectedIds.includes(m.id)).map((m: any) => m.id);
+                        if (belongsToThisProc.length > 0) {
+                            sImages[pid] = belongsToThisProc;
+                            return;
+                        }
+                    }
+
+                    // 3. Fallback: Auto-select up to 4 (Prioritize annotated)
+                    const media = (mCache[pid] || []).filter((m: any) => m.type !== 'video');
+                    const sorted = [...media].sort((a, b) => {
+                        if (a.category === 'report' && b.category !== 'report') return -1;
+                        if (a.category !== 'report' && b.category === 'report') return 1;
+                        return 0;
+                    });
+                    sImages[pid] = sorted.slice(0, 4).map(m => m.id);
                 });
 
                 setProceduresData(pData); setMediaCache(mCache); setFormState(fState);
@@ -1032,10 +1049,10 @@ export default function ReportPage({
     }, [patient.id, segmentIdsKey]);
 
     useEffect(() => {
-        if (!activeTabId && segments.length > 0) setActiveTabId(segments[0].id);
-    }, [segments, activeTabId]);
+        if (!activeTabId && visibleSegments.length > 0) setActiveTabId(visibleSegments[0].id);
+    }, [visibleSegments, activeTabId]);
 
-    const assembleAllSegmentsData = useCallback(() => segments.map((seg: any) => {
+    const assembleAllSegmentsData = useCallback(() => visibleSegments.map((seg: any) => {
         const pid = seg.id, pType = proceduresData[pid]?.type || 'generic';
         const rawForm = formState[pid] || {}, structure = resolveTemplate(pType)?.sections || [];
         const printableSections = structure.map((sect: any) => ({
@@ -1101,7 +1118,7 @@ export default function ReportPage({
     };
 
     const isReportEmpty = useCallback(() => {
-        for (const seg of segments) {
+        for (const seg of visibleSegments) {
             const form = formState[seg.id] || {};
             const hasAnyValue = Object.values(form).some((v: any) => {
                 if (v == null) return false;
@@ -1398,7 +1415,7 @@ export default function ReportPage({
                                 setShowAutoFillPopup(false);
                                 // Build new form state for all segments WITHOUT relying on React state commit
                                 const newFormState: Record<string, any> = {};
-                                segments.forEach((seg: any) => {
+                                visibleSegments.forEach((seg: any) => {
                                     const type = proceduresData[seg.id]?.type || 'generic';
                                     const template = resolveTemplate(type);
                                     const normalValues = getNormalValues(template ? template.id : type);
@@ -1416,7 +1433,7 @@ export default function ReportPage({
                                 await handleSave(false, undefined, newFormState);
 
                                 // Build segments data INLINE from newFormState — never trust the stale useCallback
-                                const segmentsForPDF = segments.map((seg: any) => {
+                                const segmentsForPDF = visibleSegments.map((seg: any) => {
                                     const pid = seg.id;
                                     const pType = proceduresData[pid]?.type || 'generic';
                                     const rawForm = newFormState[pid] || {};
@@ -1641,7 +1658,7 @@ export default function ReportPage({
                     <div className="space-y-4">
                         <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em] block">Procedure List</span>
                         <div className="space-y-2">
-                            {segments.map((s: any) => {
+                            {visibleSegments.map((s: any) => {
                                 const sType = proceduresData[s.id]?.type || s.type || 'generic';
                                 const template = resolveTemplate(sType);
                                 const name = template?.shortName || template?.name || `Segment P${s.index}`;

@@ -390,7 +390,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
                         console.log("[Recording] FileReader finished, base64 length:", base64Data.length);
                         
                         // [ADDED] Capture a thumbnail frame
-                        const thumbnailData = feedRef.current?.captureFrame() || undefined;
+                        const thumbnailData = feedRef.current?.captureFrame({ ignoreMask: true }) || undefined;
                         console.log("[Recording] Thumbnail captured:", !!thumbnailData);
 
                         const activeScope = scopes.find(s => s.id === activeScopeId);
@@ -611,6 +611,7 @@ export default function ProcedureMode({ procedureId, patient, onBack, onGenerate
 
     const handleEndProcedure = useCallback(() => {
         if (isRecording) setShowRecordingWarning(true);
+        else if (captures.length === 0) performFinish();
         else if (isDirectProcedure && captures.length > 0) performFinish();
         else setShowEndConfirm(true);
     }, [isRecording, isDirectProcedure, captures.length]);

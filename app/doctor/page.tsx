@@ -318,6 +318,11 @@ export default function DoctorPage() {
         if (!activePatient || !activePatient.procedureId) return;
         
         try {
+            // 1. Update Procedure Type if provided
+            if (data.procedureType) {
+                await updateProcedureType(activePatient.procedureId, data.procedureType);
+            }
+
             if (data.type === 'existing') {
                 const res = await reassignProcedure(activePatient.procedureId, activePatient.id, data.patientId);
                 if (res.success) {
@@ -871,6 +876,7 @@ export default function DoctorPage() {
                     specialty: doctorContactData?.specialty || "Endoscopist",
                     signaturePath: userData?.signaturePath
                 }}
+                initialSelectedIds={selectedImageIds}
                 key={`report-${refreshKey}`}
             />
         );

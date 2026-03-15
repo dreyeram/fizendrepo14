@@ -150,7 +150,8 @@ export default function QuickPatientPopup({ isOpen, onClose, onSave, captures, i
             if (patientType === 'existing') {
                 await onSave({
                     type: 'existing',
-                    patientId: selectedPatient.id
+                    patientId: selectedPatient.id,
+                    procedureType: formData.procedureType
                 });
             } else {
                 await onSave({

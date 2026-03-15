@@ -268,7 +268,10 @@ export async function saveMediaMetadata(data: {
 export async function getProcedureMedia(procedureId: string) {
     try {
         const media = await prisma.media.findMany({
-            where: { procedureId },
+            where: { 
+                procedureId,
+                isDeleted: { not: true }
+            },
             orderBy: { timestamp: "desc" },
         });
 
@@ -436,6 +439,7 @@ export async function getPatientDetails(patientId: string) {
                     include: {
                         report: true,
                         media: {
+                            where: { isDeleted: { not: true } },
                             orderBy: { timestamp: 'desc' }
                         },
                         doctor: {
@@ -455,7 +459,10 @@ export async function getPatientDetails(patientId: string) {
                         orderBy: { createdAt: 'desc' },
                         include: {
                             report: true,
-                            media: { orderBy: { timestamp: 'desc' } },
+                            media: { 
+                            where: { isDeleted: { not: true } },
+                            orderBy: { timestamp: 'desc' } 
+                        },
                             doctor: { select: { fullName: true } }
                         }
                     }

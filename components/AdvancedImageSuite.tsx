@@ -90,6 +90,7 @@ export interface Capture {
     procedureId?: string; // Added to track which procedure this belongs to
     originId?: string; // ID of the original image this was edited from
     scopeShape?: string | null; // Track the scope shape used for the capture (circle/square)
+    thumbnailUrl?: string; // [ADDED] For video thumbnails
 }
 
 interface AdvancedImageSuiteProps {
@@ -423,18 +424,29 @@ export default function AdvancedImageSuite({
 
                 if (!hasRanAutoSelect.current && (!initialSelectedIds || initialSelectedIds.length === 0)) {
                     hasRanAutoSelect.current = true;
-                    const validImages = combined.filter(c => c.type !== 'video' && !c.deleted);
                     
-                    const annotatedImages = validImages.filter(c => c.category === 'report');
-                    const rawImages = validImages.filter(c => c.category !== 'report');
+                    const newSelections = new Set<string>();
                     
-                    const annotatedOriginIds = new Set(annotatedImages.map(c => c.originId).filter(Boolean));
-                    const eligibleRawImages = rawImages.filter(c => !annotatedOriginIds.has(c.id));
+                    // Loop through visible segments (those that actually HAVE media)
+                    const relevantSegments = segments.filter(seg => 
+                        combined.some(c => c.procedureId === seg.id && !c.deleted)
+                    );
+
+                    relevantSegments.forEach(seg => {
+                        const segImages = combined.filter(c => c.procedureId === seg.id && c.type !== 'video' && !c.deleted);
+                        
+                        const annotated = segImages.filter(c => c.category === 'report');
+                        const raws = segImages.filter(c => c.category !== 'report');
+                        
+                        const annotatedOriginIds = new Set(annotated.map(c => c.originId).filter(Boolean));
+                        const eligibleRaws = raws.filter(c => !annotatedOriginIds.has(c.id));
+                        
+                        const toSelectForProc = [...annotated, ...eligibleRaws].slice(0, 4);
+                        toSelectForProc.forEach(c => newSelections.add(c.id));
+                    });
                     
-                    const toSelect = [...annotatedImages, ...eligibleRawImages].slice(0, 4);
-                    
-                    if (toSelect.length > 0) {
-                        setSelectedForReport(new Set(toSelect.map(c => c.id)));
+                    if (newSelections.size > 0) {
+                        setSelectedForReport(newSelections);
                     }
                 }
 
@@ -739,6 +751,15 @@ export default function AdvancedImageSuite({
         setSaveStatusIndicator('saving');
 
         const isEditingReportImage = currentActiveCapture.category === 'report';
+        const originId = isEditingReportImage ? currentActiveCapture.originId : activeImageId;
+
+        // [FIX] Check if an annotated version already exists for this raw image to prevent duplication
+        const existingAnnotated = !isEditingReportImage
+            ? localCaptures.find(c => c.originId === activeImageId && c.category === 'report' && !c.deleted)
+            : null;
+
+        const effectiveCaptureToReplace = isEditingReportImage ? currentActiveCapture : existingAnnotated;
+
         const rawImageUrl = isEditingReportImage && currentActiveCapture.originId
             ? localCaptures.find(c => c.id === currentActiveCapture.originId)?.url || currentActiveCapture.url
             : currentActiveCapture.url;
@@ -883,7 +904,8 @@ export default function AdvancedImageSuite({
             type: 'image',
             category: 'report',
             procedureId: targetProcedureId,
-            originId: isEditingReportImage ? currentActiveCapture.originId : activeImageId
+            originId: isEditingReportImage ? currentActiveCapture.originId : activeImageId,
+            scopeShape: currentActiveCapture.scopeShape || undefined
         };
 
         if (targetProcedureId) {
@@ -896,7 +918,8 @@ export default function AdvancedImageSuite({
                         procedureId: targetProcedureId,
                         data: newUrl,
                         type: 'IMAGE',
-                        filename: `annotated_${Date.now()}.png`
+                        filename: `annotated_${Date.now()}.png`,
+                        scopeShape: currentActiveCapture.scopeShape || undefined
                     }),
                 });
 
@@ -904,8 +927,8 @@ export default function AdvancedImageSuite({
                 const { filePath } = await uploadRes.json();
 
                 // 2. SOFT DELETE OLD IF OVERWRITING
-                if (isEditingReportImage) {
-                    await softDeleteMedia(currentActiveCapture.id);
+                if (effectiveCaptureToReplace) {
+                    await softDeleteMedia(effectiveCaptureToReplace.id);
                 }
 
                 // 3. SAVE METADATA
@@ -931,26 +954,30 @@ export default function AdvancedImageSuite({
         }
 
         // SWAP IN PLACE
+        const finalReplaceId = effectiveCaptureToReplace?.id;
+
         setLocalCaptures(prev => {
-            if (isEditingReportImage) {
-                return prev.map(c => c.id === currentActiveCapture.id ? newCapture : c);
+            if (finalReplaceId) {
+                return prev.map(c => c.id === finalReplaceId ? newCapture : c);
             } else {
                 return [newCapture, ...prev];
             }
         });
 
         onUpdateCaptures(
-            isEditingReportImage
-                ? localCaptures.map(c => c.id === currentActiveCapture.id ? newCapture : c)
+            finalReplaceId
+                ? localCaptures.map(c => c.id === finalReplaceId ? newCapture : c)
                 : [newCapture, ...localCaptures]
         );
 
         setSelectedForReport(prev => {
             const next = new Set(prev);
-            if (isEditingReportImage) {
-                next.delete(currentActiveCapture.id);
-            } else {
-                next.delete(activeImageId!);
+            if (finalReplaceId) {
+                next.delete(finalReplaceId);
+            }
+            if (!isEditingReportImage && activeImageId) {
+                // If we started from raw, remove raw from selection and use annotated version
+                next.delete(activeImageId);
             }
             next.add(newCapture.id);
             return next;
@@ -995,7 +1022,7 @@ export default function AdvancedImageSuite({
         setSaveStatusIndicator('saving');
         const timer = setTimeout(() => {
             performAutoSave();
-        }, 1000);
+        }, 2500);
 
         return () => clearTimeout(timer);
     }, [annotations, activeImageId, isDrawing, transformAction, hasUnsavedChanges]);
@@ -1686,8 +1713,17 @@ export default function AdvancedImageSuite({
                                                     }`}
                                             >
                                                 {c.type === 'video' ? (
-                                                    <div className="w-full h-full flex items-center justify-center">
-                                                        <Video size={32} className="text-zinc-800" strokeWidth={1.5} />
+                                                    <div className="w-full h-full flex items-center justify-center bg-black">
+                                                        {c.thumbnailUrl ? (
+                                                            <img src={c.thumbnailUrl} className="w-full h-full object-contain transition-transform duration-700 group-hover:scale-110" alt="" />
+                                                        ) : (
+                                                            <Video size={32} className="text-zinc-800" strokeWidth={1.5} />
+                                                        )}
+                                                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                                            <div className="w-8 h-8 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center">
+                                                                <Video size={14} className="text-white fill-white" />
+                                                            </div>
+                                                        </div>
                                                     </div>
                                                 ) : (
                                                     <img src={c.url} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="" />
@@ -1800,7 +1836,7 @@ export default function AdvancedImageSuite({
                                 <span className="text-[8px] font-bold text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded-full uppercase">{segments.length} PROCEDURES</span>
                             </div>
                             <div className="flex flex-col gap-4">
-                                {segments.map((seg) => {
+                                {visibleSegments.map((seg) => {
                                     const selectedTemplateId = selectedReportTemplates[seg.id] || defaultTemplateId;
                                     const procedureCaptures = localCaptures.filter(c => c.procedureId === seg.id && !c.deleted && selectedForReport.has(c.id));
                                     const rawCount = localCaptures.filter(c => c.procedureId === seg.id && !c.deleted && !selectedForReport.has(c.id)).length;

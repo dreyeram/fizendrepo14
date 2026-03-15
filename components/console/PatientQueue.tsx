@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "framer-motion";
-import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar } from "lucide-react";
+import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar, MapPin, Mail } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
 import { exportPatientsAction } from "@/app/actions/export";
 import { getSystemStatus } from "@/app/actions/system";
@@ -831,6 +831,48 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                             <td colSpan={7} className="p-0 border-none">
                                                                 <div className="px-6 py-6" onClick={(e) => e.stopPropagation()}>
                                                                     <div className="bg-white rounded-[24px] border border-slate-200/60 shadow-sm overflow-hidden max-h-[500px] overflow-y-auto custom-scrollbar">
+                                                                        {/* Patient Quick Info Bar */}
+                                                                        <div className="px-8 py-5 border-b border-slate-100 bg-slate-50/10 flex flex-wrap items-center gap-y-4 gap-x-12">
+                                                                            {/* Address */}
+                                                                            <div className="flex items-center gap-3 min-w-[200px] group/info">
+                                                                                <div className="w-9 h-9 rounded-xl bg-blue-50/50 flex items-center justify-center text-blue-500 group-hover/info:bg-blue-500 group-hover/info:text-white transition-all duration-300">
+                                                                                    <MapPin size={16} strokeWidth={2.5} />
+                                                                                </div>
+                                                                                <div className="flex flex-col">
+                                                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Residential Address</span>
+                                                                                    <span className="text-[13px] font-bold text-slate-700 leading-tight">
+                                                                                        {patient.address || 'Address not provided'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* Email */}
+                                                                            <div className="flex items-center gap-3 min-w-[200px] group/info">
+                                                                                <div className="w-9 h-9 rounded-xl bg-emerald-50/50 flex items-center justify-center text-emerald-500 group-hover/info:bg-emerald-500 group-hover/info:text-white transition-all duration-300">
+                                                                                    <Mail size={16} strokeWidth={2.5} />
+                                                                                </div>
+                                                                                <div className="flex flex-col">
+                                                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Email Address</span>
+                                                                                    <span className="text-[13px] font-bold text-slate-700 leading-tight">
+                                                                                        {patient.email || 'No email registered'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* Referring Physician */}
+                                                                            <div className="flex items-center gap-3 min-w-[200px] group/info">
+                                                                                <div className="w-9 h-9 rounded-xl bg-orange-50/50 flex items-center justify-center text-orange-500 group-hover/info:bg-orange-500 group-hover/info:text-white transition-all duration-300">
+                                                                                    <User size={16} strokeWidth={2.5} />
+                                                                                </div>
+                                                                                <div className="flex flex-col">
+                                                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Referring Physician</span>
+                                                                                    <span className="text-[13px] font-bold text-slate-700 leading-tight">
+                                                                                        {patient.referringDoctor || 'Self Referred'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+
                                                                         {/* Fluid Tabs */}
                                                                         <div className="flex items-center justify-between px-8 border-b border-slate-100 bg-slate-50/30">
                                                                             <div className="flex items-center gap-8">

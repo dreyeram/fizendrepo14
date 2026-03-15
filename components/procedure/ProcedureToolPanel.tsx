@@ -360,9 +360,9 @@ export default function ProcedureToolPanel({
                                 {videoCaptures.map((cap, i) => (
                                     <div key={cap.id || i} onClick={() => onPlayVideo(cap)} className="aspect-video rounded-[24px] bg-zinc-900/50 border border-white/5 overflow-hidden group cursor-pointer relative shadow-lg hover:border-indigo-500/50 transition-all duration-300">
                                         {cap.thumbnailUrl ? (
-                                            <img src={cap.thumbnailUrl} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt="" />
+                                            <img src={cap.thumbnailUrl} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" alt="" />
                                         ) : (
-                                            <video src={cap.url} className="w-full h-full object-cover" />
+                                            <video src={cap.url} className="w-full h-full object-contain" />
                                         )}
                                         <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors" />
                                         <div className="absolute inset-0 flex items-center justify-center">

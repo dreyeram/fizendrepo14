@@ -9,7 +9,7 @@ import { motion } from "framer-motion";
 
 export interface CameraStreamHandle {
     getCanvas: () => HTMLCanvasElement | null;
-    captureFrame: () => Promise<string | null>;
+    captureFrame: (options?: { ignoreMask?: boolean }) => Promise<string | null>;
     startRecording: () => Promise<boolean>;
     stopRecording: () => Promise<string | null>;
     getStatus: () => StreamStatus;
@@ -457,7 +457,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
         }, [hardwareZoom, zoom, panOffset]);
 
         // ── Capture ───────────────────────────────────────────────────────────
-        const cropAndMask = useCallback((src: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement => {
+        const cropAndMask = useCallback((src: HTMLCanvasElement, w: number, h: number, ignoreMask = false): HTMLCanvasElement => {
             if (!captureArea || captureArea.width === 0) return src;
             const { x: ax, y: ay, width: aw, height: ah } = captureArea;
             let cx = 1;
@@ -469,7 +469,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             out.width = pw; out.height = ph;
             const ctx = out.getContext('2d'); if (!ctx) return src;
             ctx.drawImage(src, px - pw / 2, py - ph / 2, pw, ph, 0, 0, pw, ph);
-            if (activeShape === 'circle') {
+            if (activeShape === 'circle' && !ignoreMask) {
                 ctx.globalCompositeOperation = 'destination-in';
                 ctx.beginPath();
                 ctx.arc(pw / 2, ph / 2, Math.min(pw, ph) / 2, 0, Math.PI * 2);
@@ -479,13 +479,13 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
             return out;
         }, [captureArea, aspectRatioCorrection, activeShape]);
 
-        const doCapture = useCallback(async (): Promise<string | null> => {
+        const doCapture = useCallback(async (options?: { ignoreMask?: boolean }): Promise<string | null> => {
             if (status === 'streaming' && videoRef.current) {
                 const c = document.createElement('canvas');
                 c.width = videoRef.current.videoWidth || 1920;
                 c.height = videoRef.current.videoHeight || 1080;
                 const ctx = c.getContext('2d'); if (ctx) ctx.drawImage(videoRef.current, 0, 0, c.width, c.height);
-                return cropAndMask(c, c.width, c.height).toDataURL('image/png', 1.0);
+                return cropAndMask(c, c.width, c.height, options?.ignoreMask).toDataURL('image/png', 1.0);
             }
             try {
                 let baseUrl = `http://${window.location.hostname || 'localhost'}:5555`;
@@ -507,7 +507,7 @@ const SurgicalCameraStream = forwardRef<CameraStreamHandle, SurgicalCameraStream
                         if (cx !== 1) ctx.drawImage(img, 0, 0, img.naturalWidth * cx, img.naturalHeight);
                         else ctx.drawImage(img, 0, 0);
                         URL.revokeObjectURL(blobUrl);
-                        resolve(cropAndMask(c, c.width * cx, c.height).toDataURL('image/png', 1.0));
+                        resolve(cropAndMask(c, c.width * cx, c.height, options?.ignoreMask).toDataURL('image/png', 1.0));
                     };
                     img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('img load failed')); };
                     img.src = blobUrl;

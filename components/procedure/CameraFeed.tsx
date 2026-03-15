@@ -8,7 +8,7 @@ import { useScopeStore } from "@/lib/store/scope.store";
 import { CustomScopeCanvasLayer } from "./CustomScopeCanvasLayer";
 
 export interface CameraFeedHandle {
-    captureFrame(): string | null;
+    captureFrame(options?: { ignoreMask?: boolean }): string | null;
     getVideoElement(): HTMLVideoElement | null;
 }
 
@@ -197,7 +197,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
         //  mapping, is the capture centre. The capture half-size is scopeW/(2*fillScale)
         //  in element space → native pixels.
         // ─────────────────────────────────────────────────────────────────────────
-        const captureFrame = useCallback((): string | null => {
+        const captureFrame = useCallback((options?: { ignoreMask?: boolean }): string | null => {
             const video = videoRef.current;
             const container = containerRef.current;
             if (!video || video.videoWidth === 0) return null;
@@ -369,7 +369,7 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(
                     return ctx;
                 };
 
-                if (isCircle) {
+                if (isCircle && !options?.ignoreMask) {
                     const out = document.createElement('canvas');
                     out.width = canvasW; out.height = canvasH;
                     const octx = drawCrop(out, true);

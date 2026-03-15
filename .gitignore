@@ -58,6 +58,7 @@ test-send.js
 test-whatsapp.js
 
 uploads/
+/public/reports/
 
 # Custom temp files
 lint*.txt
