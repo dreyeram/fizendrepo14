@@ -4,13 +4,13 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "framer-motion";
 import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar, MapPin, Mail, HardDrive } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
+import { downloadProcedureZip, downloadPatientsZip, downloadMultipleProceduresZip } from "@/lib/utils/download";
 import { exportPatientsAction } from "@/app/actions/export";
-import { exportToUSBAction } from "@/app/actions/export-usb";
+import { exportToUSBAction, exportSingleProcedureToUSBAction } from "@/app/actions/export-usb";
 import { getSystemStatus } from "@/app/actions/system";
 import { cn } from "@/lib/utils";
 import ProcedureMediaPopup from "./ProcedureMediaPopup";
 import { useNotify } from "@/lib/store/ui.store";
-import { downloadProcedureZip, downloadPatientsZip, downloadMultipleProceduresZip } from "@/lib/utils/download";
 import { SimpleTooltip, TooltipProvider } from "../ui/tooltip";
 import USBFilePicker from "../ui/USBFilePicker";
 import { useConfirm } from "@/lib/hooks/useConfirm";
@@ -81,11 +81,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const [usbConnected, setUsbConnected] = useState<boolean>(false);
     const [expandedTab, setExpandedTab] = useState<'completed' | 'pending' | 'incomplete' | 'bins'>('completed');
     const [patientCategory, setPatientCategory] = useState<'all' | 'guest'>('all');
+    const [exportTarget, setExportTarget] = useState<'browser' | 'usb'>('browser');
+    const [usbProcExport, setUsbProcExport] = useState<{ patientId: string, procId: string } | null>(null);
     const [downloadingProcs, setDownloadingProcs] = useState<Set<string>>(new Set());
     
     // USB Folder Selection
     const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
-    const [exportTarget, setExportTarget] = useState<'browser' | 'usb'>('browser');
     
     const notify = useNotify();
     const confirm = useConfirm();
@@ -238,14 +239,27 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const handleUSBFolderSelected = async (folderPath: string) => {
         setIsExporting(true);
         try {
-            const patientIds = Array.from(selectedIds);
-            notify.info("USB Export Started", `Copying data to ${folderPath}...`);
-            const res = await exportToUSBAction(patientIds, folderPath);
-            if (res.success) {
-                notify.success("USB Export Successful", res.message);
-                setSelectedIds(new Set());
+            if (usbProcExport) {
+                // Single procedure export
+                notify.info("USB Export Started", `Copying procedure data to ${folderPath}...`);
+                const res = await exportSingleProcedureToUSBAction(usbProcExport.patientId, usbProcExport.procId, folderPath);
+                if (res.success) {
+                    notify.success("USB Export Successful", res.message);
+                } else {
+                    notify.error("USB Export Failed", res.error || "Unknown error");
+                }
+                setUsbProcExport(null);
             } else {
-                notify.error("USB Export Failed", res.error || "Unknown error");
+                // Bulk export (current behavior)
+                const patientIds = Array.from(selectedIds);
+                notify.info("USB Export Started", `Copying data to ${folderPath}...`);
+                const res = await exportToUSBAction(patientIds, folderPath);
+                if (res.success) {
+                    notify.success("USB Export Successful", res.message);
+                    setSelectedIds(new Set());
+                } else {
+                    notify.error("USB Export Failed", res.error || "Unknown error");
+                }
             }
         } catch (err) {
             notify.error("USB Export Error", String(err));
@@ -1333,6 +1347,13 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                                          if (downloadingProcs.has(proc.id) || !usbConnected) return;
                                                                                                          
                                                                                                          try {
+                                                                                                             if (exportTarget === 'usb') {
+                                                                                                                 // USB Mode
+                                                                                                                 setUsbProcExport({ patientId: patient.id, procId: proc.id });
+                                                                                                                 setIsFolderPickerOpen(true);
+                                                                                                                 return;
+                                                                                                             }
+
                                                                                                              if (isBulk) {
                                                                                                                 // Mark all selected as downloading
                                                                                                                 setDownloadingProcs(prev => {

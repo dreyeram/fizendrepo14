@@ -2,10 +2,12 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, ChevronLeft, ChevronRight, ZoomIn, Download, FileText, ImageIcon, Video, Calendar, Clock, Image as LucideImage, Play, Eye, Trash2 } from "lucide-react";
+import { X, ChevronLeft, ChevronRight, ZoomIn, Download, FileText, ImageIcon, Video, Calendar, Clock, Image as LucideImage, Play, Eye, Trash2, Loader2, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSystemStatus } from "@/app/actions/system";
 import { useNotify } from "@/lib/store/ui.store";
+import { exportMediaToUSBAction, exportSingleProcedureToUSBAction } from "@/app/actions/export-usb";
+import USBFilePicker from "../ui/USBFilePicker";
 
 interface MediaItem {
     id: string;
@@ -48,6 +50,9 @@ export default function ProcedureMediaPopup({
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
     const [selectedItemArray, setSelectedItemArray] = useState<MediaItem[]>([]);
     const [usbConnected, setUsbConnected] = useState<boolean>(false);
+    const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
+    const [pendingExport, setPendingExport] = useState<{ type: 'media' | 'report', id: string } | null>(null);
+    const [isExporting, setIsExporting] = useState(false);
     
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
     const notify = useNotify();
@@ -94,6 +99,30 @@ export default function ProcedureMediaPopup({
             return () => clearTimeout(timer);
         }
     }, [activeProcedureId, isOpen]);
+
+    const handleUSBFolderSelected = async (folderPath: string) => {
+        if (!pendingExport) return;
+        setIsExporting(true);
+        try {
+            if (pendingExport.type === 'media') {
+                notify.info("USB Export Started", "Copying media file to USB...");
+                const res = await exportMediaToUSBAction(pendingExport.id, folderPath);
+                if (res.success) notify.success("Export Successful", res.message);
+                else notify.error("Export Failed", res.error);
+            } else {
+                notify.info("USB Export Started", "Copying procedure data (including report) to USB...");
+                const res = await exportSingleProcedureToUSBAction(patient.id, pendingExport.id, folderPath);
+                if (res.success) notify.success("Export Successful", res.message);
+                else notify.error("Export Failed", res.error);
+            }
+        } catch (err) {
+            notify.error("USB Export Error", String(err));
+        } finally {
+            setIsExporting(false);
+            setIsFolderPickerOpen(false);
+            setPendingExport(null);
+        }
+    };
 
     if (!isOpen) return null;
 
@@ -291,7 +320,34 @@ export default function ProcedureMediaPopup({
                                     <VideoGrid items={videos} onSelect={(idx: number) => openLightbox(idx, videos)} emptyMessage="No videos recorded" />
                                 )}
                                 {activeTab === 'reports' && (
-                                    <ReportViewer procedureId={activeProcedureId!} />
+                                    <div className="flex flex-col gap-6 h-full">
+                                        <div className="flex items-center justify-between bg-white/5 border border-white/10 rounded-2xl p-4">
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">Procedure Report</span>
+                                                <span className="text-sm font-bold text-white">Full Procedure Data & PDF Report</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => {
+                                                    if (!usbConnected) return;
+                                                    setPendingExport({ type: 'report', id: activeProcedureId! });
+                                                    setIsFolderPickerOpen(true);
+                                                }}
+                                                disabled={!usbConnected || isExporting}
+                                                className={cn(
+                                                    "flex items-center gap-2 px-6 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all",
+                                                    usbConnected 
+                                                        ? "bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20" 
+                                                        : "bg-white/5 text-white/20 border border-white/5 cursor-not-allowed"
+                                                )}
+                                            >
+                                                {isExporting && pendingExport?.type === 'report' ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
+                                                Save to USB
+                                            </button>
+                                        </div>
+                                        <div className="flex-1">
+                                            <ReportViewer procedureId={activeProcedureId!} />
+                                        </div>
+                                    </div>
                                 )}
                                 {activeTab === 'bins' && (
                                     <GalleryGrid items={bins} onSelect={(idx: number) => openLightbox(idx, bins)} emptyMessage="Bin is empty" />
@@ -334,22 +390,23 @@ export default function ProcedureMediaPopup({
                                 <button 
                                     onClick={(e) => {
                                         if (!usbConnected) return;
-                                        // Trigger download
-                                        const link = document.createElement('a');
-                                        link.href = selectedItem.url;
-                                        link.download = `media_${selectedItem.id}`;
-                                        link.click();
+                                        setPendingExport({ type: 'media', id: selectedItem.id });
+                                        setIsFolderPickerOpen(true);
                                     }}
-                                    disabled={!usbConnected}
+                                    disabled={!usbConnected || isExporting}
                                     className={cn(
                                         "w-14 h-14 rounded-full flex items-center justify-center transition-all border active:scale-90 group",
                                         usbConnected 
                                             ? "bg-white/5 hover:bg-white/10 text-white border-white/5" 
                                             : "bg-white/5 text-white/20 border-white/5 cursor-not-allowed"
                                     )}
-                                    title={usbConnected ? "Download Media" : "Connect USB external storage"}
+                                    title={usbConnected ? "Save to USB" : "Connect USB external storage"}
                                 >
-                                    <Download size={20} className={cn("transition-transform", usbConnected && "group-hover:scale-110")} />
+                                    {isExporting && pendingExport?.type === 'media' && pendingExport.id === selectedItem.id ? (
+                                        <Loader2 size={20} className="animate-spin" />
+                                    ) : (
+                                        <Download size={20} className={cn("transition-transform", usbConnected && "group-hover:scale-110")} />
+                                    )}
                                 </button>
                                 <button onClick={() => setSelectedIndex(null)} className="w-14 h-14 bg-white/5 hover:bg-red-500/80 rounded-full flex items-center justify-center text-white transition-all border border-white/5 active:scale-95 group">
                                     <X size={20} className="group-hover:rotate-90 transition-transform" />
@@ -399,6 +456,15 @@ export default function ProcedureMediaPopup({
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            <USBFilePicker 
+                isOpen={isFolderPickerOpen}
+                onClose={() => setIsFolderPickerOpen(false)}
+                onFilesSelected={() => {}} 
+                onFolderSelected={handleUSBFolderSelected}
+                mode="folder"
+                title="Select USB Export Destination"
+            />
         </div>
     );
 }

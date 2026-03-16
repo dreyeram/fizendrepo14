@@ -1,8 +1,8 @@
 "use client";
-
 import React, { useState, useEffect } from 'react';
-import { useSettings } from "@/contexts/SettingsContext"; // Assume used for some global settings if needed, or local
-import { AlertCircle, HardDrive, Download, Upload, RefreshCw, Folder, File, ArrowLeft } from 'lucide-react';
+import { AlertCircle, HardDrive, Download, Upload, RefreshCw, Folder, File, ArrowLeft, Loader2 } from 'lucide-react';
+import { useNotify } from "@/lib/store/ui.store";
+import { exportFullBackupToUSBAction } from "@/app/actions/export-usb";
 
 interface FileItem {
     name: string;
@@ -61,34 +61,33 @@ export default function DataManagement() {
         fetchItems('root');
     };
 
-    const handleAction = async () => {
-        if (!selectedFile && mode.startsWith('import')) return;
+    const notify = useNotify();
 
-        // Mock Implementation for now -> In real app, we would POST to /api/storage
-        if (mode === 'import_logo' || mode === 'import_header') {
-            if (selectedFile) {
-                const dest = mode === 'import_logo' ? '/public/uploads/logo.png' : '/public/uploads/header.png'; // Example
-                try {
-                    const res = await fetch('/api/storage', {
-                        method: 'POST',
-                        body: JSON.stringify({ action: 'copy', sourcePath: selectedFile.path, destPath: dest })
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        alert(`Successfully imported ${selectedFile.name}`);
-                    } else {
-                        alert(`Import failed: ${data.error}`);
-                    }
-                } catch (e) {
-                    alert(`Import error: ${e}`);
+    const handleAction = async () => {
+        if (mode === 'export_backup') {
+            const dest = browserPath === 'root' ? '/' : browserPath;
+            setLoading(true);
+            try {
+                notify.info("Backup Started", "Performing full system backup to USB...");
+                const res = await exportFullBackupToUSBAction(dest);
+                if (res.success) {
+                    notify.success("Backup Successful", res.message);
+                    setMode('none');
+                } else {
+                    notify.error("Backup Failed", res.error);
                 }
+            } catch (err) {
+                notify.error("Backup Error", String(err));
+            } finally {
+                setLoading(false);
             }
-        } else if (mode === 'export_backup') {
-            // For export, we need a directory, not a file. 
-            // Current browsing logic selects files. 
-            // We'll assume exporting to current browserPath
-            alert(`Exporting backup to ${browserPath}...`);
+            return;
         }
+
+        if (!selectedFile) return;
+
+        // Implement import logic or other actions here
+        notify.info("Action Triggered", `Action: ${mode} on file: ${selectedFile.name}`);
         setMode('none');
     };
 
@@ -203,9 +202,10 @@ export default function DataManagement() {
                     <div className="p-3 border-t border-slate-200 dark:border-slate-700 flex justify-end">
                         <button
                             onClick={handleAction}
-                            disabled={!selectedFile && !mode.includes('export')} // Export might be dir based
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={loading || (!selectedFile && !mode.includes('export'))} // Export might be dir based
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         >
+                            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                             Confirm {mode.split('_')[0]}
                         </button>
                     </div>

@@ -149,3 +149,210 @@ export async function exportToUSBAction(patientIds: string[], destFolder: string
         return { success: false, error: String(error) };
     }
 }
+
+/**
+ * Exports a single procedure to a local path (USB)
+ */
+export async function exportSingleProcedureToUSBAction(patientId: string, procedureId: string, destFolder: string) {
+    try {
+        if (!patientId || !procedureId) {
+            return { success: false, error: "Missing patient or procedure ID" };
+        }
+
+        if (!destFolder) {
+            return { success: false, error: "Destination folder not specified" };
+        }
+
+        const patient = await prisma.patient.findUnique({
+            where: { id: patientId },
+            include: {
+                procedures: {
+                    where: { id: procedureId },
+                    include: {
+                        media: { where: { isDeleted: false } },
+                        report: true
+                    }
+                }
+            }
+        });
+
+        if (!patient || !patient.procedures?.[0]) {
+            return { success: false, error: "Procedure not found" };
+        }
+
+        const proc = patient.procedures[0];
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+        const safeName = (patient.fullName || 'Patient').replace(/[^a-zA-Z0-9]/g, '_');
+        const procDate = new Date(proc.createdAt).toISOString().split('T')[0];
+        const procSafeType = (proc.type || 'Procedure').replace(/[^a-zA-Z0-9]/g, '_');
+        
+        const exportFolderName = `${patient.mrn || 'N-A'}_${safeName}_${procDate}_${procSafeType}`;
+        const exportPath = path.join(destFolder, exportFolderName);
+
+        if (!fs.existsSync(exportPath)) {
+            fs.mkdirSync(exportPath, { recursive: true });
+        }
+
+        // Write patient/procedure info
+        const details = [
+            `Name: ${patient.fullName}`,
+            `MRN: ${patient.mrn}`,
+            `Procedure: ${proc.type}`,
+            `Date: ${new Date(proc.createdAt).toLocaleString()}`,
+            `Exported At: ${new Date().toLocaleString()}`
+        ].join('\n');
+        fs.writeFileSync(path.join(exportPath, 'info.txt'), details);
+
+        let filesCopied = 0;
+
+        // Copy media
+        if (proc.media && proc.media.length > 0) {
+            const imgPath = path.join(exportPath, 'images');
+            const vidPath = path.join(exportPath, 'videos');
+            const annPath = path.join(exportPath, 'annotated');
+
+            fs.mkdirSync(imgPath, { recursive: true });
+            fs.mkdirSync(vidPath, { recursive: true });
+            fs.mkdirSync(annPath, { recursive: true });
+
+            for (const m of proc.media) {
+                if (!m.filePath || !fs.existsSync(m.filePath)) continue;
+                
+                let targetDir = imgPath;
+                if (m.type === 'VIDEO') targetDir = vidPath;
+                else if (m.type === 'ANNOTATED') targetDir = annPath;
+
+                const dest = path.join(targetDir, path.basename(m.filePath));
+                fs.copyFileSync(m.filePath, dest);
+                filesCopied++;
+            }
+        }
+
+        // Copy report
+        const reportFile = path.join(INTERNAL_PATHS.reports, `report_${proc.id}.pdf`);
+        if (fs.existsSync(reportFile)) {
+            fs.copyFileSync(reportFile, path.join(exportPath, 'Report.pdf'));
+            filesCopied++;
+        }
+
+        return { 
+            success: true, 
+            message: `Successfully exported procedure and ${filesCopied} files to ${exportFolderName}`,
+            exportPath
+        };
+
+    } catch (error) {
+        console.error("Single Procedure USB Export Error:", error);
+        return { success: false, error: String(error) };
+    }
+}
+
+/**
+ * Exports a single media file to a USB path
+ */
+export async function exportMediaToUSBAction(mediaId: string, destFolder: string) {
+    try {
+        const media = await prisma.media.findUnique({
+            where: { id: mediaId },
+            include: { procedure: { include: { patient: true } } }
+        });
+
+        if (!media || !media.filePath || !fs.existsSync(media.filePath)) {
+            return { success: false, error: "Media file not found" };
+        }
+
+        if (!destFolder) {
+            return { success: false, error: "Destination folder not specified" };
+        }
+
+        const patient = media.procedure?.patient;
+        const safePatientName = (patient?.fullName || 'Patient').replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = path.basename(media.filePath);
+        
+        // We can just copy it directly to the destFolder, or create a patient folder there.
+        // Let's copy it directly but maybe prefix with patient MRN
+        const destFilename = patient?.mrn ? `${patient.mrn}_${filename}` : filename;
+        const destPath = path.join(destFolder, destFilename);
+
+        fs.copyFileSync(media.filePath, destPath);
+
+        return { 
+            success: true, 
+            message: `Successfully exported media to ${destFilename}`,
+            destPath
+        };
+    } catch (error) {
+        console.error("Media USB Export Error:", error);
+        return { success: false, error: String(error) };
+    }
+}
+
+/**
+ * Performs a full system backup (DB + Media + Reports) to USB
+ */
+export async function exportFullBackupToUSBAction(destFolder: string) {
+    try {
+        if (!destFolder) {
+            return { success: false, error: "Destination folder not specified" };
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+        const backupFolderName = `FullBackup_${timestamp}_${Date.now()}`;
+        const backupPath = path.join(destFolder, backupFolderName);
+
+        if (!fs.existsSync(backupPath)) {
+            fs.mkdirSync(backupPath, { recursive: true });
+        }
+
+        const stats = {
+            copied: 0,
+            failed: 0
+        };
+
+        const copyRecursive = (src: string, dest: string) => {
+            if (!fs.existsSync(src)) return;
+            const isDir = fs.statSync(src).isDirectory();
+            if (isDir) {
+                if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+                fs.readdirSync(src).forEach(child => {
+                    copyRecursive(path.join(src, child), path.join(dest, child));
+                });
+            } else {
+                try {
+                    fs.copyFileSync(src, dest);
+                    stats.copied++;
+                } catch (e) {
+                    console.error(`Backup failed for ${src}:`, e);
+                    stats.failed++;
+                }
+            }
+        };
+
+        // 1. Copy Database
+        if (fs.existsSync(INTERNAL_PATHS.database)) {
+            const dbDest = path.join(backupPath, 'database');
+            fs.mkdirSync(dbDest, { recursive: true });
+            fs.copyFileSync(INTERNAL_PATHS.database, path.join(dbDest, 'endoscopy.db'));
+            stats.copied++;
+        }
+
+        // 2. Copy Media
+        copyRecursive(INTERNAL_PATHS.media, path.join(backupPath, 'media'));
+
+        // 3. Copy Reports
+        copyRecursive(INTERNAL_PATHS.reports, path.join(backupPath, 'reports'));
+
+        // 4. Copy Config
+        copyRecursive(INTERNAL_PATHS.config, path.join(backupPath, 'config'));
+
+        return { 
+            success: true, 
+            message: `Full backup completed. Copied ${stats.copied} files to ${backupFolderName}. ${stats.failed > 0 ? `Failed ${stats.failed} files.` : ''}`,
+            backupPath
+        };
+
+    } catch (error) {
+        console.error("Full Backup USB Error:", error);
+        return { success: false, error: String(error) };
+    }
+}
