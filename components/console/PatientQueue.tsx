@@ -867,7 +867,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                                                                                 <div className="flex flex-col">
                                                                                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Referring Physician</span>
                                                                                     <span className="text-[13px] font-bold text-slate-700 leading-tight">
-                                                                                        {patient.referringDoctor || 'Self Referred'}
+                                                                                        {patient.referringDoctor || 'Self'}
                                                                                     </span>
                                                                                 </div>
                                                                             </div>

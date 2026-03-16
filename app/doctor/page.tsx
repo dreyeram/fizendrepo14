@@ -45,6 +45,7 @@ interface Patient {
     gender: 'Male' | 'Female' | 'Other';
     mobile: string;
     email?: string;
+    referringDoctor?: string;
     procedureId?: string;
     procedureType?: string;
 }
@@ -306,8 +307,7 @@ export default function DoctorPage() {
         });
 
         if (res.success && res.patient) {
-            setIsDirectProcedure(true);
-            handleStartProcedure(res.patient);
+            handleStartProcedure(res.patient, undefined, true);
         } else {
             console.error("Initialization failed:", res.error);
             alert("Initialization failed. Please check system logs.");
@@ -409,8 +409,10 @@ export default function DoctorPage() {
     };
 
     // C. Start Procedure (Manual "Play" Button)
-    const handleStartProcedure = async (patient: any, procedureId?: string) => {
-        console.log("[DoctorPage] handleStartProcedure called for patient:", patient.id, "procedureId:", procedureId);
+    const handleStartProcedure = async (patient: any, procedureId?: string, isDirect: boolean = false) => {
+        console.log("[DoctorPage] handleStartProcedure called for patient:", patient.id, "procedureId:", procedureId, "isDirect:", isDirect);
+
+        setIsDirectProcedure(isDirect);
 
         // 0. Check camera status
         try {
@@ -499,6 +501,7 @@ export default function DoctorPage() {
             age: (patient.age !== undefined && patient.age !== null) ? patient.age : 0,
             gender: patient.gender,
             mobile: patient.mobile,
+            referringDoctor: patient.referringDoctor,
             procedureId: activeProcId
         };
         setActivePatient(pObj);
@@ -528,6 +531,7 @@ export default function DoctorPage() {
             age: patient.age,
             gender: patient.gender,
             mobile: patient.mobile,
+            referringDoctor: patient.referringDoctor,
             procedureId: procedure.id
         });
 
@@ -905,7 +909,7 @@ export default function DoctorPage() {
                                     alert("No media or report available for this specific procedure yet.");
                                 }
                             }}
-                            onStartProcedure={(p: any, procId) => handleStartProcedure(p, procId)}
+                            onStartProcedure={(p: any, procId) => handleStartProcedure(p, procId, false)}
                             onStartAnnotate={(p: any, proc: any) => handleCreateReportFromImport(proc.media || [], proc, p)}
                             onEndAndAnnotate={handleEndAndAnnotate}
                             onEditReport={(p: any, proc: any) => {
@@ -918,6 +922,7 @@ export default function DoctorPage() {
                                     age: p.age,
                                     gender: p.gender,
                                     mobile: p.mobile,
+                                    referringDoctor: p.referringDoctor,
                                     procedureId: proc.id
                                 });
 
@@ -1099,7 +1104,7 @@ export default function DoctorPage() {
                                 onBack={() => setSelectedPatient(null)}
                                 onStartProcedure={(p, procId) => {
                                     setSelectedPatient(null);
-                                    handleStartProcedure(p, procId);
+                                    handleStartProcedure(p, procId, false);
                                 }}
                                 onCreateReport={(media, proc) => {
                                     handleCreateReportFromImport(media, proc, selectedPatient);
@@ -1115,6 +1120,7 @@ export default function DoctorPage() {
                                         age: selectedPatient.age,
                                         gender: selectedPatient.gender,
                                         mobile: selectedPatient.mobile,
+                                        referringDoctor: selectedPatient.referringDoctor,
                                         procedureId: proc.id
                                     });
 

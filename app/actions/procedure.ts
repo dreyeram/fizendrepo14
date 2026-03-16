@@ -553,7 +553,8 @@ export async function getPatientDetails(patientId: string) {
                 email: (patient as any).email || (patient.contactInfo ? JSON.parse(patient.contactInfo).email : undefined),
                 address: (patient as any).address,
                 contactInfo: patient.contactInfo,
-                createdAt: patient.createdAt
+                createdAt: patient.createdAt,
+                referringDoctor: (patient as any).referringDoctor
             },
             procedures,
             allMedia,
