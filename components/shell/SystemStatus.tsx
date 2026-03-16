@@ -22,9 +22,11 @@ export function SystemStatus() {
     const [currentTime, setCurrentTime] = useState<Date | null>(null);
     const [isEjecting, setIsEjecting] = useState(false);
     const [ejectMsg, setEjectMsg] = useState<string | null>(null);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const confirm = useConfirm();
 
     const refreshStatus = async () => {
+        setIsRefreshing(true);
         try {
             const data = await getSystemStatus();
             setStatus({
@@ -34,6 +36,9 @@ export function SystemStatus() {
             });
         } catch (error) {
             console.error("Failed to fetch system status", error);
+        } finally {
+            // Give it a small delay so the animation is visible
+            setTimeout(() => setIsRefreshing(false), 600);
         }
     };
 
@@ -239,14 +244,33 @@ export function SystemStatus() {
                     </Tooltip.Root>
                 )}
 
-                {/* Date and Time */}
-                <div className="flex flex-col items-end px-2 py-1 rounded-lg hover:bg-black/[0.04] transition-colors cursor-default ml-1">
-                    <span className="text-[11px] font-bold text-slate-700 leading-none">
-                        {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
-                    </span>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter leading-none mt-1">
-                        {currentTime.toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                    </span>
+                {/* Date and Time with Refresh */}
+                <div className="flex items-center gap-0.5 ml-1">
+                    <button 
+                        onClick={() => refreshStatus()}
+                        disabled={isRefreshing}
+                        className={cn(
+                            "p-2 rounded-lg transition-all duration-300 outline-none group",
+                            isRefreshing ? "bg-blue-50 text-blue-500" : "hover:bg-black/[0.04] text-slate-400 hover:text-slate-600 active:scale-90"
+                        )}
+                        title="Refresh system status"
+                    >
+                        <RefreshCw 
+                            size={14} 
+                            className={cn(
+                                "transition-transform duration-500",
+                                isRefreshing ? "animate-spin" : "group-hover:rotate-180"
+                            )} 
+                        />
+                    </button>
+                    <div className="flex flex-col items-end px-2 py-1 rounded-lg hover:bg-black/[0.04] transition-colors cursor-default min-w-[55px]">
+                        <span className="text-[11px] font-bold text-slate-700 leading-none">
+                            {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter leading-none mt-1">
+                            {currentTime.toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        </span>
+                    </div>
                 </div>
             </div>
         </Tooltip.Provider>
