@@ -560,7 +560,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                             )}
                             title="Download as ZIP to your computer"
                         >
-                            <Download size={14} />
+                            {isExporting && exportTarget === 'browser' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                             ZIP
                         </button>
                         <div className="w-[1px] h-3 bg-slate-200" />
@@ -589,6 +589,7 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                 onFolderSelected={handleUSBFolderSelected}
                 mode="folder"
                 title="Select Export Destination"
+                usbOnly
             />
 
             {/* Advanced Filters Panel - Single Row Version */}

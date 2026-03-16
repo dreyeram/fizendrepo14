@@ -8,6 +8,8 @@ import { getSystemStatus } from "@/app/actions/system";
 import { useNotify } from "@/lib/store/ui.store";
 import { exportMediaToUSBAction, exportSingleProcedureToUSBAction } from "@/app/actions/export-usb";
 import USBFilePicker from "../ui/USBFilePicker";
+import { downloadProcedureZip } from "@/lib/utils/download";
+import { saveAs } from 'file-saver';
 
 interface MediaItem {
     id: string;
@@ -53,6 +55,7 @@ export default function ProcedureMediaPopup({
     const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
     const [pendingExport, setPendingExport] = useState<{ type: 'media' | 'report', id: string } | null>(null);
     const [isExporting, setIsExporting] = useState(false);
+    const [isBrowserDownloading, setIsBrowserDownloading] = useState(false);
     
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
     const notify = useNotify();
@@ -326,23 +329,58 @@ export default function ProcedureMediaPopup({
                                                 <span className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">Procedure Report</span>
                                                 <span className="text-sm font-bold text-white">Full Procedure Data & PDF Report</span>
                                             </div>
-                                            <button 
-                                                onClick={() => {
-                                                    if (!usbConnected) return;
-                                                    setPendingExport({ type: 'report', id: activeProcedureId! });
-                                                    setIsFolderPickerOpen(true);
-                                                }}
-                                                disabled={!usbConnected || isExporting}
-                                                className={cn(
-                                                    "flex items-center gap-2 px-6 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all",
-                                                    usbConnected 
-                                                        ? "bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20" 
-                                                        : "bg-white/5 text-white/20 border border-white/5 cursor-not-allowed"
-                                                )}
-                                            >
-                                                {isExporting && pendingExport?.type === 'report' ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
-                                                Save to USB
-                                            </button>
+                                            <div className="flex items-center gap-3">
+                                                <button 
+                                                    onClick={async () => {
+                                                        const proc = sortedProcedures.find(p => p.id === activeProcedureId);
+                                                        if (!proc) return;
+                                                        setIsBrowserDownloading(true);
+                                                        try {
+                                                            await downloadProcedureZip(patient, proc);
+                                                            notify.success("Download Started", "ZIP archive preparation complete.");
+                                                        } catch (err) {
+                                                            notify.error("Download Failed", "Could not generate ZIP archive.");
+                                                        } finally {
+                                                            setIsBrowserDownloading(false);
+                                                        }
+                                                    }}
+                                                    disabled={isBrowserDownloading}
+                                                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all active:scale-95 disabled:opacity-50"
+                                                >
+                                                    {isBrowserDownloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                                                    Download ZIP
+                                                </button>
+                                                
+                                                <button 
+                                                    onClick={() => {
+                                                        const reportUrl = `/api/report-serve?id=${activeProcedureId}`;
+                                                        saveAs(reportUrl, `Report_${activeProcedureId}.pdf`);
+                                                        notify.success("Download Started", "PDF report download initiated.");
+                                                    }}
+                                                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all active:scale-95"
+                                                >
+                                                    <FileText size={14} />
+                                                    Download PDF
+                                                </button>
+
+                                                <button 
+                                                    onClick={() => {
+                                                        if (!usbConnected) return;
+                                                        setPendingExport({ type: 'report', id: activeProcedureId! });
+                                                        setIsFolderPickerOpen(true);
+                                                    }}
+                                                    disabled={!usbConnected || isExporting}
+                                                    className={cn(
+                                                        "flex items-center gap-2 px-6 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all",
+                                                        usbConnected 
+                                                            ? "bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20" 
+                                                            : "bg-white/5 text-white/20 border border-white/5 cursor-not-allowed"
+                                                    )}
+                                                >
+                                                    {isExporting && pendingExport?.type === 'report' ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
+                                                    Save to USB
+                                                </button>
+                                            </div>
                                         </div>
                                         <div className="flex-1">
                                             <ReportViewer procedureId={activeProcedureId!} />
@@ -387,6 +425,17 @@ export default function ProcedureMediaPopup({
                                 </div>
                             </div>
                             <div className="flex gap-4">
+                                 <button 
+                                    onClick={() => {
+                                        const filename = selectedItem.url.split('/').pop() || 'download';
+                                        saveAs(selectedItem.url, filename);
+                                        notify.info("Download Started", "Media download initiated.");
+                                    }}
+                                    className="w-14 h-14 rounded-full flex items-center justify-center transition-all border active:scale-90 bg-white/5 hover:bg-white/10 text-white border-white/5 group"
+                                    title="Download to Computer"
+                                >
+                                    <LucideImage size={20} className="group-hover:scale-110 transition-transform" />
+                                </button>
                                 <button 
                                     onClick={(e) => {
                                         if (!usbConnected) return;
@@ -405,7 +454,7 @@ export default function ProcedureMediaPopup({
                                     {isExporting && pendingExport?.type === 'media' && pendingExport.id === selectedItem.id ? (
                                         <Loader2 size={20} className="animate-spin" />
                                     ) : (
-                                        <Download size={20} className={cn("transition-transform", usbConnected && "group-hover:scale-110")} />
+                                        <HardDrive size={20} className={cn("transition-transform", usbConnected && "group-hover:scale-110")} />
                                     )}
                                 </button>
                                 <button onClick={() => setSelectedIndex(null)} className="w-14 h-14 bg-white/5 hover:bg-red-500/80 rounded-full flex items-center justify-center text-white transition-all border border-white/5 active:scale-95 group">

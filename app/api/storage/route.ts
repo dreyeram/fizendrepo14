@@ -104,10 +104,23 @@ async function getDrives() {
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const dirPath = searchParams.get('path');
+    const usbOnly = searchParams.get('usbOnly') === 'true';
 
     try {
         if (!dirPath || dirPath === 'root') {
-            const drives = await getDrives();
+            let drives = await getDrives();
+            
+            if (usbOnly) {
+                if (process.platform === 'win32') {
+                    // On Windows, keep it simple for now as USB letters are dynamic
+                    // but we can at least filter D: if we want to be safe, but D: is often a data drive
+                    // drives = drives.filter(d => d.name !== 'D:');
+                } else {
+                    // On Linux, getDrives already checks /media, /run/media, /mnt
+                    // which are typical USB mount points.
+                }
+            }
+
             return NextResponse.json({ success: true, items: drives });
         }
 
