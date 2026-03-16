@@ -4,12 +4,14 @@ import React, { useState, useEffect } from 'react';
 import { Loader2, RefreshCw, LogOut, CheckCircle, Smartphone } from 'lucide-react';
 import Image from 'next/image';
 import QRCode from 'qrcode';
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 export default function WhatsAppConnect() {
     const [status, setStatus] = useState<string>('DISCONNECTED');
     const [qrCodeData, setQrCodeData] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
+    const confirm = useConfirm();
 
     const fetchStatus = async () => {
         try {
@@ -54,7 +56,13 @@ export default function WhatsAppConnect() {
     };
 
     const handleLogout = async () => {
-        if (!confirm('Are you sure you want to disconnect WhatsApp? You will need to scan the QR code again.')) return;
+        const ok = await confirm({
+            title: "Disconnect WhatsApp",
+            message: "Are you sure you want to disconnect WhatsApp? You will need to scan the QR code again.",
+            confirmLabel: "Disconnect",
+            variant: "danger"
+        });
+        if (!ok) return;
 
         setIsLoading(true);
         try {

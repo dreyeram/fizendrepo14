@@ -409,7 +409,7 @@ export default function NewPatientForm({
 
                             {/* Auto-Generated MRN Display */}
                             <div className="space-y-1.5 opacity-80">
-                                <label className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                                <label className="text-[13px] font-bold text-slate-700 flex items-center gap-2">
                                     MRN No
                                     <Lock size={12} className="text-slate-400" />
                                 </label>
@@ -446,7 +446,7 @@ export default function NewPatientForm({
                                     {/* Full Name */}
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Patient Name <span className="text-red-500">*</span></label>
+                                            <label className="text-[13px] font-bold text-slate-700 tracking-tight">Patient Name <span className="text-red-500">*</span></label>
                                             {renderCharCounter(formData.fullName.length, 22, 5)}
                                         </div>
                                         <div className="relative group/input">
@@ -470,7 +470,7 @@ export default function NewPatientForm({
                                     {/* Age */}
                                     <div className="space-y-1.5 relative">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-xs font-bold text-slate-700">Age <span className="text-red-500">*</span></label>
+                                            <label className="text-[13px] font-bold text-slate-700">Age <span className="text-red-500">*</span></label>
                                             <div className="group/info relative">
                                                 <Info size={12} className="text-slate-400 cursor-help" />
                                                 <div className="absolute right-0 bottom-full mb-2 w-52 p-2 bg-slate-900 text-white text-[10px] font-medium rounded-lg opacity-0 group-hover/info:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl border border-slate-800">
@@ -496,7 +496,7 @@ export default function NewPatientForm({
 
                                     {/* Gender */}
                                     <div className="space-y-2">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Gender <span className="text-red-500">*</span></label>
+                                        <label className="text-[13px] font-bold text-slate-700 tracking-tight">Gender <span className="text-red-500">*</span></label>
                                         <div className={cn(
                                             "flex p-1 rounded-xl border h-11 transition-all",
                                             error && !formData.gender ? "bg-rose-50 border-rose-200" : "bg-slate-100/80 border-slate-200"
@@ -523,7 +523,7 @@ export default function NewPatientForm({
                                 <div className="grid grid-cols-1 gap-y-2 border-t border-slate-100 pt-2">
                                     {/* Mobile No */}
                                     <div className="space-y-2 relative">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Mobile No <span className="text-red-500">*</span></label>
+                                        <label className="text-[13px] font-bold text-slate-700 tracking-tight">Mobile No <span className="text-red-500">*</span></label>
                                         <div className="flex gap-2">
                                             <div className="relative group/country select-none w-28 shrink-0">
                                                 <div className={cn(
@@ -580,7 +580,7 @@ export default function NewPatientForm({
                                     {/* Email Address */}
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Email Address</label>
+                                            <label className="text-[13px] font-bold text-slate-700 tracking-tight">Email Address</label>
                                             {renderCharCounter(formData.email.length, 255, 200)}
                                         </div>
                                         <div className="relative group/input">
@@ -603,7 +603,7 @@ export default function NewPatientForm({
                                     {/* Residential Address */}
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-[12px] font-bold text-slate-700 tracking-tight">Residential Address</label>
+                                            <label className="text-[13px] font-bold text-slate-700 tracking-tight">Residential Address</label>
                                             {renderCharCounter(formData.address.length, 250, 200)}
                                         </div>
                                         <div className="relative group/input">
@@ -623,7 +623,7 @@ export default function NewPatientForm({
 
                                     {/* Referring Physician */}
                                     <div className="space-y-2 relative group/ref">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">Referring Physician</label>
+                                        <label className="text-[13px] font-bold text-slate-700 tracking-tight">Referring Physician</label>
                                         <div className="relative">
                                             <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
                                                 <Stethoscope size={18} className="text-slate-400 group-focus-within/ref:text-blue-500 transition-colors" />
@@ -670,7 +670,7 @@ export default function NewPatientForm({
 
                                     {/* ABHA ID */}
                                     <div className="space-y-1.5 group/refid">
-                                        <label className="text-[12px] font-bold text-slate-700 tracking-tight">ABHA ID</label>
+                                        <label className="text-[13px] font-bold text-slate-700 tracking-tight">ABHA ID</label>
                                         <div className="relative">
                                             <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
                                                 <FileText size={18} className="text-slate-400 group-focus-within/refid:text-blue-500 transition-colors" />

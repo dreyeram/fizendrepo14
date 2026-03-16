@@ -12,6 +12,8 @@ import {
     permanentDeletePatient
 } from "@/app/actions/settings";
 import { searchPatients } from "@/app/actions/auth";
+import { useConfirm } from "@/lib/hooks/useConfirm";
+import { useNotify } from "@/lib/store/ui.store";
 
 interface Patient {
     id: string;
@@ -42,6 +44,8 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
     const [selectedPatients, setSelectedPatients] = useState<Set<string>>(new Set());
     const [isLoading, setIsLoading] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const confirm = useConfirm();
+    const notify = useNotify();
 
     useEffect(() => {
         checkPinStatus();
@@ -130,8 +134,9 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
             loadPatients();
             loadTrashedPatients();
             onRefresh?.();
+            notify.success("Patients Trashed", `Successfully moved ${selectedPatients.size} patient(s) to trash.`);
         } else {
-            alert("Error: " + result.error);
+            notify.error("Delete Failed", result.error || "Failed to move patients to trash.");
         }
         setIsDeleting(false);
     };
@@ -142,22 +147,29 @@ export default function DangerZone({ userId, onNavigateToProfile, onRefresh }: D
             loadPatients();
             loadTrashedPatients();
             onRefresh?.();
+            notify.success("Patient Restored", "The patient record has been restored to active status.");
         } else {
-            alert("Error: " + result.error);
+            notify.error("Restore Failed", result.error || "Failed to restore patient record.");
         }
     };
 
     const handlePermanentDelete = async (patientId: string) => {
-        if (!confirm("This will PERMANENTLY delete this patient and ALL their data. This cannot be undone. Continue?")) {
-            return;
-        }
+        const ok = await confirm({
+            title: "Permanent Deletion",
+            message: "This will PERMANENTLY delete this patient and ALL their data. This cannot be undone.",
+            confirmLabel: "Delete Forever",
+            variant: "danger"
+        });
+        
+        if (!ok) return;
 
         const result = await permanentDeletePatient(patientId);
         if (result.success) {
             loadTrashedPatients();
             onRefresh?.();
+            notify.success("Patient Deleted", "The patient and all associated data have been permanently removed.");
         } else {
-            alert("Error: " + result.error);
+            notify.error("Delete Failed", result.error || "Failed to permanently delete patient.");
         }
     };
 

@@ -2,15 +2,18 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "framer-motion";
-import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar, MapPin, Mail } from "lucide-react";
+import { Search, Play, Users, User, Loader2, UploadCloud, Edit2, Filter, Download, CheckSquare, Square, MoreHorizontal, ChevronDown, ChevronRight, FileText, Image as ImageIcon, AlertCircle, ArrowRight, Eye, Settings, X, Check, Trash2, ChevronUp, RotateCcw, Plus, Calendar, MapPin, Mail, HardDrive } from "lucide-react";
 import { searchPatients } from "@/app/actions/auth";
 import { exportPatientsAction } from "@/app/actions/export";
+import { exportToUSBAction } from "@/app/actions/export-usb";
 import { getSystemStatus } from "@/app/actions/system";
 import { cn } from "@/lib/utils";
 import ProcedureMediaPopup from "./ProcedureMediaPopup";
 import { useNotify } from "@/lib/store/ui.store";
 import { downloadProcedureZip, downloadPatientsZip, downloadMultipleProceduresZip } from "@/lib/utils/download";
 import { SimpleTooltip, TooltipProvider } from "../ui/tooltip";
+import USBFilePicker from "../ui/USBFilePicker";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface PatientQueueProps {
     onViewHistory: (patient: any, procedureId: string) => void;
@@ -80,7 +83,12 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
     const [patientCategory, setPatientCategory] = useState<'all' | 'guest'>('all');
     const [downloadingProcs, setDownloadingProcs] = useState<Set<string>>(new Set());
     
+    // USB Folder Selection
+    const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
+    const [exportTarget, setExportTarget] = useState<'browser' | 'usb'>('browser');
+    
     const notify = useNotify();
+    const confirm = useConfirm();
 
     // Columns Visibility State
     const [showColMenu, setShowColMenu] = useState(false);
@@ -206,25 +214,44 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
 
     const handleExport = async () => {
         if (selectedIds.size === 0) return;
+        
+        if (exportTarget === 'browser') {
+            setIsExporting(true);
+            try {
+                const selectedPatients = patients.filter(p => selectedIds.has(p.id));
+                if (selectedPatients.length === 0) throw new Error("No patients found");
+                notify.info("Export Started", "Preparing files for bulk ZIP archive...");
+                await downloadPatientsZip(selectedPatients, orgData);
+                notify.success("Export Successful", "Bulk ZIP archive generated.");
+                setSelectedIds(new Set());
+            } catch (err) {
+                notify.error("Export Failed", String(err));
+            } finally {
+                setIsExporting(false);
+            }
+        } else {
+            // USB Mode - Open Folder Picker
+            setIsFolderPickerOpen(true);
+        }
+    };
+
+    const handleUSBFolderSelected = async (folderPath: string) => {
         setIsExporting(true);
         try {
-            // Find full patient objects from filtered list matching the selected IDs
-            const selectedPatients = patients.filter(p => selectedIds.has(p.id));
-            if (selectedPatients.length === 0) throw new Error("Could not construct target patients for export");
-
-            notify.success("Export Started", "Preparing files for bulk ZIP archive...");
-            
-            // Generate ZIP directly using utility
-            // orgData comes from DoctorPage injected props
-            await downloadPatientsZip(selectedPatients, orgData);
-            
-            notify.success("Export Successful", "Bulk ZIP archive generated successfully.");
-            setSelectedIds(new Set());
+            const patientIds = Array.from(selectedIds);
+            notify.info("USB Export Started", `Copying data to ${folderPath}...`);
+            const res = await exportToUSBAction(patientIds, folderPath);
+            if (res.success) {
+                notify.success("USB Export Successful", res.message);
+                setSelectedIds(new Set());
+            } else {
+                notify.error("USB Export Failed", res.error || "Unknown error");
+            }
         } catch (err) {
-            console.error("Bulk export failed:", err);
-            notify.error("Export Failed", "There was an error generating the bulk ZIP archive.");
+            notify.error("USB Export Error", String(err));
         } finally {
             setIsExporting(false);
+            setIsFolderPickerOpen(false);
         }
     };
 
@@ -337,20 +364,30 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
         setExpandedId(prev => (prev === id ? null : id));
     };
 
-    const handleDeleteProc = (e: React.MouseEvent, patientId: string, procId: string) => {
+    const handleDeleteProc = async (e: React.MouseEvent, patientId: string, procId: string) => {
         e.stopPropagation();
-        setPatients(prev => prev.map(patient => {
-            if (patient.id === patientId) {
-                return {
-                    ...patient,
-                    procedures: (patient.procedures || []).map((p: any) => 
-                        p.id === procId ? { ...p, deleted: true } : p
-                    )
-                };
-            }
-            return patient;
-        }));
-        notify.info("Moved to Bins", "Procedure moved to the bins tab.");
+        
+        const ok = await confirm({
+            title: "Move to Bin",
+            message: "Move this procedure to bin? You can restore it later from the bin tab.",
+            confirmLabel: "Move to Bin",
+            variant: "primary"
+        });
+
+        if (ok) {
+            setPatients(prev => prev.map(patient => {
+                if (patient.id === patientId) {
+                    return {
+                        ...patient,
+                        procedures: (patient.procedures || []).map((p: any) => 
+                            p.id === procId ? { ...p, deleted: true } : p
+                        )
+                    };
+                }
+                return patient;
+            }));
+            notify.info("Moved to Bins", "Procedure moved to the bins tab.");
+        }
     };
 
     const handleRestoreProc = (e: React.MouseEvent, patientId: string, procId: string) => {
@@ -369,10 +406,17 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
         notify.success("Restored", "Procedure has been restored effectively.");
     };
 
-    const handlePermanentDeleteProc = (e: React.MouseEvent, patientId: string, procId: string) => {
+    const handlePermanentDeleteProc = async (e: React.MouseEvent, patientId: string, procId: string) => {
         e.stopPropagation();
-        // Using a custom confirm style if possible, but standard confirm is safer for now
-        if (window.confirm("Delete this procedure forever? This cannot be undone.")) {
+        
+        const ok = await confirm({
+            title: "Delete Permanently",
+            message: "Delete this procedure forever? This is permanent and you will be unable to recover it.",
+            confirmLabel: "Delete Forever",
+            variant: "danger"
+        });
+
+        if (ok) {
             setPatients(prev => prev.map(patient => {
                 if (patient.id === patientId) {
                     return {
@@ -490,21 +534,48 @@ export default function PatientQueue({ onViewHistory, onStartProcedure, onStartA
                         <UploadCloud size={16} />
                     </button>
 
-                    <button
-                        onClick={handleExport}
-                        disabled={selectedIds.size === 0 || isExporting || !usbConnected}
-                        className={cn(
-                            "p-2 rounded-lg transition-all",
-                            !usbConnected || selectedIds.size === 0 || isExporting
-                                ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-                                : "bg-blue-600 text-white shadow-lg shadow-blue-500/10 hover:bg-blue-700"
-                        )}
-                        title={!usbConnected ? "Connect USB external storage to export" : "Export Selected"}
-                    >
-                        {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                    </button>
+                    <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                        <button
+                            onClick={() => { setExportTarget('browser'); handleExport(); }}
+                            disabled={selectedIds.size === 0 || isExporting}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all",
+                                selectedIds.size === 0 || isExporting
+                                    ? "text-slate-400 cursor-not-allowed"
+                                    : "text-slate-600 hover:bg-white hover:text-blue-600"
+                            )}
+                            title="Download as ZIP to your computer"
+                        >
+                            <Download size={14} />
+                            ZIP
+                        </button>
+                        <div className="w-[1px] h-3 bg-slate-200" />
+                        <button
+                            onClick={() => { setExportTarget('usb'); handleExport(); }}
+                            disabled={selectedIds.size === 0 || isExporting || !usbConnected}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all",
+                                !usbConnected || selectedIds.size === 0 || isExporting
+                                    ? "text-slate-400 cursor-not-allowed"
+                                    : "text-slate-600 hover:bg-white hover:text-blue-600"
+                            )}
+                            title={!usbConnected ? "Connect USB external storage to export" : "Export directly to USB folder"}
+                        >
+                            {isExporting && exportTarget === 'usb' ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
+                            USB
+                        </button>
+                    </div>
                 </div>
             </div>
+
+            <USBFilePicker 
+                isOpen={isFolderPickerOpen}
+                onClose={() => setIsFolderPickerOpen(false)}
+                onFilesSelected={() => {}} 
+                onFolderSelected={handleUSBFolderSelected}
+                mode="folder"
+                title="Select Export Destination"
+            />
 
             {/* Advanced Filters Panel - Single Row Version */}
             <AnimatePresence>

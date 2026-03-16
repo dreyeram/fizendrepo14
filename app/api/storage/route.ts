@@ -29,35 +29,59 @@ async function getDrives() {
         for (const root of potentialRoots) {
             try {
                 if (!fs.existsSync(root)) continue;
-                const entries = await readdir(root);
+                
+                let entries = [];
+                try {
+                    entries = await readdir(root);
+                } catch (e) {
+                    console.error(`Error reading root ${root}:`, e);
+                    continue;
+                }
                 
                 for (const entry of entries) {
                     const fullPath = path.join(root, entry);
                     try {
                         const stats = await stat(fullPath);
                         if (stats.isDirectory()) {
-                            // If it's a directory in /media, /mnt etc, it's likely a drive or a user folder containing drives
+                            // Basic check if we can even enter the directory
+                            try {
+                                await readdir(fullPath);
+                            } catch (e) {
+                                // If we can't read it (e.g. /media/pi restricted), 
+                                // check if there are sub-mounts we CAN read
+                                if (root === '/media' || root === '/run/media') {
+                                    // Sometimes /media/pi is restricted but /media/pi/DRIVENAME is not
+                                    // if it's auto-mounted with specific user permissions.
+                                    // However, usually we need to be that user.
+                                    // Let's try to check for common sub-entries if possible or just skip.
+                                }
+                                continue; 
+                            }
+
                             drives.push({
                                 name: entry,
                                 path: fullPath,
                                 type: 'drive'
                             });
 
-                            // Optimization: if it's a user folder like /media/pi, check inside it immediately
-                            // to save the user a click, but also keep the folder itself.
+                            // Optimization: if it's a user folder like /media/pi, check inside it
                             if (root === '/media' || root === '/run/media') {
                                 try {
                                     const subEntries = await readdir(fullPath);
                                     for (const subEntry of subEntries) {
                                         const subPath = path.join(fullPath, subEntry);
-                                        const subStats = await stat(subPath);
-                                        if (subStats.isDirectory()) {
-                                            drives.push({
-                                                name: `${entry}/${subEntry}`,
-                                                path: subPath,
-                                                type: 'drive'
-                                            });
-                                        }
+                                        try {
+                                            const subStats = await stat(subPath);
+                                            if (subStats.isDirectory()) {
+                                                // Test if this sub-dir is readable
+                                                await readdir(subPath);
+                                                drives.push({
+                                                    name: subEntry, // Just use the drive name
+                                                    path: subPath,
+                                                    type: 'drive'
+                                                });
+                                            }
+                                        } catch (e) {}
                                     }
                                 } catch (e) {}
                             }

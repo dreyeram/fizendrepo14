@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Moon, Sun, Monitor, Palette, Save, Check, RotateCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings } from "@/contexts/SettingsContext";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface AppearancePanelProps {
     onUnsavedChange: (hasChanges: boolean) => void;
@@ -25,6 +26,7 @@ const ACCENT_COLORS = [
 export default function AppearancePanel({ onUnsavedChange }: AppearancePanelProps) {
     const { settings, updateSetting, saveSettings, resetSettings } = useSettings();
     const [saveSuccess, setSaveSuccess] = useState(false);
+    const confirm = useConfirm();
 
     const handleThemeChange = (theme: 'light' | 'dark' | 'system') => {
         updateSetting('theme', theme);
@@ -43,8 +45,14 @@ export default function AppearancePanel({ onUnsavedChange }: AppearancePanelProp
         setTimeout(() => setSaveSuccess(false), 3000);
     };
 
-    const handleReset = () => {
-        if (confirm('Reset all appearance settings to defaults?')) {
+    const handleReset = async () => {
+        const ok = await confirm({
+            title: 'Reset Appearance',
+            message: 'Reset all appearance settings to defaults?',
+            confirmLabel: 'Reset Settings',
+            variant: 'danger'
+        });
+        if (ok) {
             resetSettings();
             onUnsavedChange(false);
         }

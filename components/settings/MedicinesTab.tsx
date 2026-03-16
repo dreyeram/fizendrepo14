@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Plus, Pill, Edit2, Trash2, Search, Loader2, Save, X, AlertCircle } from "lucide-react";
 import { getMedicines, addMedicine, updateMedicine, deleteMedicine } from "@/app/actions/inventory";
 import { motion, AnimatePresence } from "framer-motion";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface Medicine {
     id: string;
@@ -31,6 +32,7 @@ export default function MedicinesTab({ orgId }: MedicinesTabProps) {
         category: "Tablet",
         dosageForm: "Oral"
     });
+    const confirm = useConfirm();
 
     useEffect(() => {
         loadMedicines();
@@ -61,7 +63,13 @@ export default function MedicinesTab({ orgId }: MedicinesTabProps) {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm("Are you sure you want to delete this medicine?")) return;
+        const ok = await confirm({
+            title: "Delete Medicine",
+            message: "Are you sure you want to delete this medicine? This will remove it from the inventory.",
+            confirmLabel: "Delete Medicine",
+            variant: "danger"
+        });
+        if (!ok) return;
         try {
             await deleteMedicine(id);
             loadMedicines();

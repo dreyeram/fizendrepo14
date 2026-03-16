@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import { AlertTriangle, Trash2, RefreshCw, Lock, KeyRound, Check, ShieldAlert, UserX } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { setDangerZonePin, hasDangerZonePin, verifyDangerZonePin, deleteAllPatients } from "@/app/actions/settings";
+import { useConfirm } from "@/lib/hooks/useConfirm";
+import { useNotify } from "@/lib/store/ui.store";
 
 interface DangerPanelProps {
     userId: string;
@@ -22,6 +24,8 @@ export default function DangerPanel({ userId, onUpdate }: DangerPanelProps) {
     const [isDeleting, setIsDeleting] = useState(false);
     const [pinRequired, setPinRequired] = useState(false);
     const [enteredPin, setEnteredPin] = useState('');
+    const confirm = useConfirm();
+    const notify = useNotify();
 
     // Check PIN status on mount
     React.useEffect(() => {
@@ -82,13 +86,13 @@ export default function DangerPanel({ userId, onUpdate }: DangerPanelProps) {
         const result = await deleteAllPatients();
 
         if (result.success) {
-            alert(`Deleted ${result.count} patients and all related data.`);
+            notify.success("Data Deleted", `Deleted ${result.count} patients and all related data.`);
             setDeleteConfirm('');
             setPinRequired(false);
             setEnteredPin('');
             onUpdate();
         } else {
-            alert('Error: ' + result.error);
+            notify.error("Database Error", result.error || "Failed to delete patient data.");
         }
         setIsDeleting(false);
     };
@@ -269,10 +273,17 @@ export default function DangerPanel({ userId, onUpdate }: DangerPanelProps) {
                         </div>
                     </div>
                     <button
-                        onClick={() => {
-                            if (confirm('Reset all application settings to defaults? This will not delete patient data.')) {
-                                // TODO: Reset settings
-                                alert('Settings have been reset to defaults.');
+                        onClick={async () => {
+                            const ok = await confirm({
+                                title: 'Reset Settings',
+                                message: 'Reset all application settings to defaults? This will not delete patient data.',
+                                confirmLabel: 'Reset Everything',
+                                variant: 'danger'
+                            });
+                            if (ok) {
+                                // TODO: Reset settings backend action
+                                notify.success('Settings Reset', 'Configuration has been restored to factory defaults.');
+                                onUpdate();
                             }
                         }}
                         className="px-4 py-2 rounded-xl border border-amber-200 text-amber-700 font-semibold text-sm hover:bg-amber-50 transition-colors flex items-center gap-2"

@@ -417,9 +417,21 @@ export default function AdvancedImageSuite({
 
                 setLocalCaptures(combined);
 
-                // If no active image, set last one
+                // If no active image, set first image if available, else first video
                 if (!activeImageId && combined.length > 0) {
-                    setActiveImageId(combined[0].id);
+                    const firstImage = combined.find(c => c.type !== 'video' && !c.deleted);
+                    if (firstImage) {
+                        setActiveImageId(firstImage.id);
+                        setSidebarTab('images');
+                    } else {
+                        const firstVideo = combined.find(c => c.type === 'video' && !c.deleted);
+                        if (firstVideo) {
+                            setActiveImageId(firstVideo.id);
+                            setSidebarTab('videos');
+                        } else {
+                            setActiveImageId(combined[0].id);
+                        }
+                    }
                 }
 
                 if (!hasRanAutoSelect.current && (!initialSelectedIds || initialSelectedIds.length === 0)) {
@@ -558,27 +570,8 @@ export default function AdvancedImageSuite({
     const handleZoomReset = () => setZoom(1);
 
     const handleCaptureVideoFrame = () => {
-        if (!videoRef.current || !activeCapture) return;
-        // Logic same as before...
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        ctx.drawImage(video, 0, 0);
-        const frameUrl = canvas.toDataURL('image/jpeg', 0.9);
-        const newCapture: Capture = {
-            id: Math.random().toString(36).substr(2, 9),
-            url: frameUrl,
-            timestamp: new Date().toLocaleTimeString(),
-            type: 'image',
-            category: 'raw',
-            procedureId: activeCapture.procedureId // Inherit procedure ID
-        };
-        setLocalCaptures(prev => [newCapture, ...prev]);
-        onUpdateCaptures([newCapture, ...localCaptures]); // Keep parent in sync roughly
-        showNotification('Frame captured!', 'success');
+        // Disabled as per user request
+        console.log("Frame capture disabled");
     };
 
     const getMousePos = (e: React.MouseEvent) => {
@@ -1050,7 +1043,45 @@ export default function AdvancedImageSuite({
 
         if (isDeleting) {
             showNotification("Item moved to bin. You can recover it from the bin later.", "warning");
-            if (activeImageId === id) setActiveImageId(null);
+            
+            if (activeImageId === id) {
+                // Find visible items in the same segment
+                const remaining = next.filter(c => {
+                    if (c.deleted) return false;
+                    if (!activeSegment?.id) return true;
+                    return c.procedureId === activeSegment.id || !c.procedureId;
+                });
+
+                if (remaining.length > 0) {
+                    // Try to find the item that was exactly before or after this one
+                    const deletedIdx = localCaptures.findIndex(c => c.id === id);
+                    // Find closest available item in 'next' array (which has updated 'deleted' flags)
+                    // We look for the first non-deleted item near the original index
+                    let nextToSelect = null;
+                    
+                    // Look forward
+                    for (let i = deletedIdx + 1; i < localCaptures.length; i++) {
+                        if (!next[i].deleted && (activeSegment?.id ? next[i].procedureId === activeSegment.id : true)) {
+                            nextToSelect = next[i].id;
+                            break;
+                        }
+                    }
+                    
+                    // If not found forward, look backward
+                    if (!nextToSelect) {
+                        for (let i = deletedIdx - 1; i >= 0; i--) {
+                            if (!next[i].deleted && (activeSegment?.id ? next[i].procedureId === activeSegment.id : true)) {
+                                nextToSelect = next[i].id;
+                                break;
+                            }
+                        }
+                    }
+
+                    setActiveImageId(nextToSelect || remaining[0].id);
+                } else {
+                    setActiveImageId(null);
+                }
+            }
         }
     };
 
@@ -1565,11 +1596,7 @@ export default function AdvancedImageSuite({
                             ) : (
                                 <div className="pb-6 pt-4 flex flex-wrap items-center justify-center gap-3 z-50 pointer-events-none w-full max-w-[90%] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
                                     {/* Video Frame Capture */}
-                                    <div className="bg-zinc-900/95 backdrop-blur-2xl border border-white/10 p-1.5 rounded-2xl shadow-2xl flex items-center pointer-events-auto ring-1 ring-white/5">
-                                        <button onClick={handleCaptureVideoFrame} className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase tracking-[0.2em] flex items-center gap-2 transition-all active:scale-95 shadow-xl shadow-blue-900/40 border border-blue-400/30 group">
-                                            <Camera size={16} className="group-hover:rotate-12 transition-transform" /> Frame
-                                        </button>
-                                    </div>
+                                    {/* Video Frame Capture Removed */}
 
                                     {/* Zoom Cluster for Video */}
                                     <div className="bg-zinc-900/95 backdrop-blur-2xl border border-white/10 p-2.5 rounded-2xl shadow-2xl flex items-center gap-4 pointer-events-auto ring-1 ring-white/5 px-4 h-10">

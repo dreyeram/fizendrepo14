@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Database, Download, Upload, HardDrive, Trash2, RefreshCw, FileJson, FileSpreadsheet, Check, AlertCircle, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import USBFilePicker from "@/components/ui/USBFilePicker";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface DataPanelProps {
     userId: string;
@@ -54,6 +55,7 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
     const [exportSuccess, setExportSuccess] = useState('');
     const [exportError, setExportError] = useState('');
     const [isImportPickerOpen, setIsImportPickerOpen] = useState(false);
+    const confirm = useConfirm();
 
     // Simulated storage usage (would come from server in production)
     const storageUsed = 2.4; // GB
@@ -123,7 +125,13 @@ export default function DataPanel({ userId, onUpdate }: DataPanelProps) {
     };
 
     const handleClearCache = async () => {
-        if (!confirm('Clear all cached data? This will not delete your saved data.')) return;
+        const ok = await confirm({
+            title: 'Clear Cache',
+            message: 'Clear all cached data? This will not delete your saved data.',
+            confirmLabel: 'Clear Cache',
+            variant: 'danger'
+        });
+        if (!ok) return;
         setIsClearing(true);
 
         try {

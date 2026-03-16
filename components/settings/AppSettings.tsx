@@ -11,6 +11,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings, SettingsState } from "@/contexts/SettingsContext";
 import DataManagement from "./DataManagement";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface AppSettingsProps {
     onClose?: () => void;
@@ -36,6 +37,7 @@ export default function AppSettings({ onClose }: AppSettingsProps) {
     const [activeSection, setActiveSection] = useState('appearance');
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+    const confirm = useConfirm();
 
     const handleSave = async () => {
         setSaving(true);
@@ -45,8 +47,14 @@ export default function AppSettings({ onClose }: AppSettingsProps) {
         setTimeout(() => setSaved(false), 2000);
     };
 
-    const handleReset = () => {
-        if (confirm('Reset all settings to defaults? This cannot be undone.')) {
+    const handleReset = async () => {
+        const ok = await confirm({
+            title: 'Reset Settings',
+            message: 'Reset all settings to defaults? This cannot be undone.',
+            confirmLabel: 'Reset Everything',
+            variant: 'danger'
+        });
+        if (ok) {
             resetSettings();
         }
     };

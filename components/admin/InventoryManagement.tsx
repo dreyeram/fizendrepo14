@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { getMedicines, addMedicine, updateMedicine, deleteMedicine } from "@/app/actions/inventory";
 import { motion, AnimatePresence } from "framer-motion";
+import { useConfirm } from "@/lib/hooks/useConfirm";
+import { useNotify } from "@/lib/store/ui.store";
 
 interface Medicine {
     id: string;
@@ -31,6 +33,8 @@ export default function InventoryManagement({ organizationId }: InventoryManagem
     const [editingMedicine, setEditingMedicine] = useState<Medicine | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState("");
+    const confirm = useConfirm();
+    const notify = useNotify();
 
     // Form State
     const [formData, setFormData] = useState({
@@ -120,12 +124,20 @@ export default function InventoryManagement({ organizationId }: InventoryManagem
     };
 
     const handleDelete = async (id: string, name: string) => {
-        if (confirm(`Are you sure you want to delete ${name}?`)) {
+        const ok = await confirm({
+            title: "Delete Medicine",
+            message: `Are you sure you want to delete ${name}?`,
+            confirmLabel: "Delete",
+            variant: "danger"
+        });
+        
+        if (ok) {
             const result = await deleteMedicine(id);
             if (result.success) {
+                notify.success("Medicine Deleted", `${name} has been removed from inventory.`);
                 loadData();
             } else {
-                alert(result.error || "Failed to delete");
+                notify.error("Delete Failed", result.error || "Failed to delete medicine.");
             }
         }
     };

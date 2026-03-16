@@ -2,7 +2,10 @@
 
 import React, { useEffect, useState } from "react";
 import { getAllUsers, createNewUser, removeUser, updateUser } from "@/app/actions/admin";
-import { Plus, Trash2, X, Loader2, Users, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, X, Loader2, Users, Eye, EyeOff, Edit3 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useConfirm } from "@/lib/hooks/useConfirm";
+import { useNotify } from "@/lib/store/ui.store";
 
 interface User {
     id: string;
@@ -26,6 +29,8 @@ export default function UserManagement({ externalSelectedUser, onExternalClose }
     const [isEditing, setIsEditing] = useState(false);
     const [editingUserId, setEditingUserId] = useState<string | null>(null);
     const [showPasswordInput, setShowPasswordInput] = useState(false);
+    const confirm = useConfirm();
+    const notify = useNotify();
 
     // Form state
     const [formData, setFormData] = useState({
@@ -110,15 +115,21 @@ export default function UserManagement({ externalSelectedUser, onExternalClose }
     }
 
     async function handleDeleteUser(userId: string, userName: string) {
-        if (!confirm(`Are you sure you want to delete "${userName}"? This cannot be undone.`)) {
-            return;
-        }
+        const ok = await confirm({
+            title: "Delete Staff Member",
+            message: `Are you sure you want to delete "${userName}"? This cannot be undone.`,
+            confirmLabel: "Delete User",
+            variant: "danger"
+        });
+        
+        if (!ok) return;
 
         const result = await removeUser(userId);
         if (result.success) {
+            notify.success("User Deleted", `Successfully removed ${userName} from the team.`);
             loadUsers();
         } else {
-            alert(result.error || "Failed to delete user");
+            notify.error("Delete Failed", result.error || "Failed to delete user record.");
         }
     }
 
@@ -371,5 +382,3 @@ export default function UserManagement({ externalSelectedUser, onExternalClose }
     );
 }
 
-import { AnimatePresence, motion } from "framer-motion";
-import { Edit3 } from "lucide-react";

@@ -6,6 +6,7 @@ import {
     X, Plus, Star, Trash2, Target, Circle, Square
 } from "lucide-react";
 import { useScopeStore, CustomScope } from "@/lib/store/scope.store";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 interface Props {
     isOpen: boolean;
@@ -18,6 +19,7 @@ export function CustomScopeSettingsInterface({ isOpen, onClose, isFreezed }: Pro
         scopes, activeScopeId,
         setActiveScopeId, setDefaultScope, removeScope, setDrawingShape, addScope
     } = useScopeStore();
+    const confirm = useConfirm();
 
     const [isChoosingShape, setIsChoosingShape] = useState(false);
 
@@ -179,9 +181,15 @@ export function CustomScopeSettingsInterface({ isOpen, onClose, isFreezed }: Pro
                                                                 <Star size={12} />
                                                             </button>
                                                             <button
-                                                                onClick={e => {
+                                                                onClick={async (e) => {
                                                                     e.stopPropagation();
-                                                                    if (window.confirm(`Delete scope "${scope.name}"?`)) removeScope(scope.id);
+                                                                    const ok = await confirm({
+                                                                        title: "Delete Scope",
+                                                                        message: `Delete scope "${scope.name}"?`,
+                                                                        confirmLabel: "Delete",
+                                                                        variant: "danger"
+                                                                    });
+                                                                    if (ok) removeScope(scope.id);
                                                                 }}
                                                                 className="p-1.5 rounded-lg text-zinc-600 hover:bg-red-500/20 hover:text-red-400 transition-all"
                                                                 title="Delete"

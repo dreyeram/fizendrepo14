@@ -20,9 +20,20 @@ interface USBFilePickerProps {
     accept?: string;
     multiple?: boolean;
     title?: string;
+    mode?: 'file' | 'folder';
+    onFolderSelected?: (folderPath: string) => void;
 }
 
-export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept = "*/*", multiple = false, title = "Select File" }: USBFilePickerProps) {
+export default function USBFilePicker({ 
+    isOpen, 
+    onClose, 
+    onFilesSelected, 
+    onFolderSelected,
+    accept = "*/*", 
+    multiple = false, 
+    title = "Select File",
+    mode = 'file'
+}: USBFilePickerProps) {
     const [currentPath, setCurrentPath] = useState<string>("root");
     const [items, setItems] = useState<FileItem[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -121,6 +132,13 @@ export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept
     };
 
     const handleSelect = async () => {
+        if (mode === 'folder') {
+            if (currentPath === "root") return;
+            onFolderSelected?.(currentPath);
+            onClose();
+            return;
+        }
+
         if (selectedPaths.size === 0) return;
         
         setIsConverting(true);
@@ -183,7 +201,9 @@ export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept
                             </div>
                             <div>
                                 <h3 className="text-lg font-black text-slate-800">{title}</h3>
-                                <p className="text-xs font-bold text-slate-500">Select files from external storage</p>
+                                <p className="text-xs font-bold text-slate-500">
+                                    {mode === 'folder' ? 'Select a destination folder' : 'Select files from external storage'}
+                                </p>
                             </div>
                         </div>
                         <button 
@@ -280,7 +300,9 @@ export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept
                     {/* Footer Actions */}
                     <div className="px-6 py-4 border-t border-slate-100 bg-white flex items-center justify-between">
                         <div className="text-xs font-bold text-slate-500">
-                            {selectedPaths.size} file(s) selected
+                            {mode === 'folder' 
+                                ? (currentPath === 'root' ? 'Select a drive first' : `Selected: ${currentPath}`)
+                                : `${selectedPaths.size} file(s) selected`}
                         </div>
                         <div className="flex items-center gap-3">
                             <button
@@ -291,7 +313,7 @@ export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept
                             </button>
                             <button
                                 onClick={handleSelect}
-                                disabled={selectedPaths.size === 0 || isConverting}
+                                disabled={(mode === 'file' && selectedPaths.size === 0) || (mode === 'folder' && currentPath === 'root') || isConverting}
                                 className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold text-sm transition-all hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                             >
                                 {isConverting ? (
@@ -302,7 +324,7 @@ export default function USBFilePicker({ isOpen, onClose, onFilesSelected, accept
                                 ) : (
                                     <>
                                         <CheckCircle2 size={16} />
-                                        Select File{selectedPaths.size !== 1 ? 's' : ''}
+                                        {mode === 'folder' ? 'Select Folder' : `Select File${selectedPaths.size !== 1 ? 's' : ''}`}
                                     </>
                                 )}
                             </button>

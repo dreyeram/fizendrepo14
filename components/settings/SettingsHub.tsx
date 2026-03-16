@@ -18,6 +18,7 @@ import DangerPanel from "./panels/DangerPanel";
 import EmailPanel from "./panels/EmailPanel";
 import MessageTemplatesPanel from "@/components/admin/settings/MessageTemplatesPanel";
 import EquipmentSettings from "@/components/settings/EquipmentSettings";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 // Types
 interface UserData {
@@ -77,6 +78,7 @@ const GROUP_LABELS: Record<string, string> = {
 export default function SettingsHub({ user, organization, onUpdate, onClose, defaultTab = 'profile' }: SettingsHubProps) {
     const [activeTab, setActiveTab] = useState(defaultTab);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const confirm = useConfirm();
 
     // Filter tabs based on user role
     const visibleTabs = SETTINGS_TABS.filter(tab => {
@@ -93,19 +95,29 @@ export default function SettingsHub({ user, organization, onUpdate, onClose, def
         return acc;
     }, {} as Record<string, typeof SETTINGS_TABS>);
 
-    const handleTabChange = (tabId: string) => {
+    const handleTabChange = async (tabId: string) => {
         if (hasUnsavedChanges) {
-            const confirm = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirm) return;
+            const ok = await confirm({
+                title: 'Unsaved Changes',
+                message: 'You have unsaved changes. Discard them?',
+                confirmLabel: 'Discard Changes',
+                variant: 'danger'
+            });
+            if (!ok) return;
         }
         setHasUnsavedChanges(false);
         setActiveTab(tabId);
     };
 
-    const handleClose = () => {
+    const handleClose = async () => {
         if (hasUnsavedChanges) {
-            const confirm = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirm) return;
+            const ok = await confirm({
+                title: 'Unsaved Changes',
+                message: 'You have unsaved changes. Discard them?',
+                confirmLabel: 'Discard Changes',
+                variant: 'danger'
+            });
+            if (!ok) return;
         }
         onClose();
     };

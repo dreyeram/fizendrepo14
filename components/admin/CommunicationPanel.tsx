@@ -8,6 +8,8 @@ import {
     Wifi, WifiOff, Zap, Shield
 } from 'lucide-react';
 import QRCode from 'qrcode';
+import { useConfirm } from "@/lib/hooks/useConfirm";
+import { useNotify } from "@/lib/store/ui.store";
 
 interface WhatsAppStatus {
     connection: string;
@@ -35,6 +37,8 @@ export default function CommunicationPanel() {
     const [waStatus, setWaStatus] = useState<WhatsAppStatus | null>(null);
     const [waLoading, setWaLoading] = useState(false);
     const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
+    const confirm = useConfirm();
+    const notify = useNotify();
 
     // Email state
     const [emailConfigured, setEmailConfigured] = useState(false);
@@ -102,7 +106,13 @@ export default function CommunicationPanel() {
     };
 
     const handleWaDisconnect = async () => {
-        if (!confirm('Disconnect WhatsApp? You will need to scan QR code again.')) return;
+        const ok = await confirm({
+            title: "Disconnect WhatsApp",
+            message: "Disconnect WhatsApp? You will need to scan QR code again.",
+            confirmLabel: "Disconnect",
+            variant: "danger"
+        });
+        if (!ok) return;
 
         setWaLoading(true);
         try {

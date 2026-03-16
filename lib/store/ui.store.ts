@@ -29,6 +29,20 @@ export interface ModalState {
 }
 
 /**
+ * Confirmation state
+ */
+export interface ConfirmationState {
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    variant?: 'primary' | 'danger' | 'success';
+    onConfirm: () => void;
+    onCancel: () => void;
+}
+
+/**
  * UI Store state
  */
 interface UIState {
@@ -49,6 +63,9 @@ interface UIState {
     isGlobalLoading: boolean;
     loadingMessage: string | null;
 
+    // Confirmation
+    confirmation: ConfirmationState;
+
     // Actions
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
@@ -62,6 +79,10 @@ interface UIState {
 
     openModal: (type: string, data?: Record<string, unknown>) => void;
     closeModal: () => void;
+
+    // Confirmation actions
+    setConfirmation: (confirmation: Omit<ConfirmationState, 'isOpen'>) => void;
+    clearConfirmation: () => void;
 
     setGlobalLoading: (loading: boolean, message?: string) => void;
 }
@@ -85,6 +106,13 @@ export const useUIStore = create<UIState>()(
             theme: 'dark',
             notifications: [],
             modal: { isOpen: false, type: null, data: {} },
+            confirmation: {
+                isOpen: false,
+                title: '',
+                message: '',
+                onConfirm: () => {},
+                onCancel: () => {}
+            },
             isGlobalLoading: false,
             loadingMessage: null,
 
@@ -132,6 +160,15 @@ export const useUIStore = create<UIState>()(
             closeModal: () => set({
                 modal: { isOpen: false, type: null, data: {} },
             }),
+
+            // Confirmation actions
+            setConfirmation: (confirmation) => set({
+                confirmation: { ...confirmation, isOpen: true },
+            }),
+
+            clearConfirmation: () => set((state) => ({
+                confirmation: { ...state.confirmation, isOpen: false },
+            })),
 
             // Loading actions
             setGlobalLoading: (loading, message) => set({

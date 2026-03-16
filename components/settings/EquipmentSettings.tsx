@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Plus, Search, Trash2, Edit2, Check, X, Stethoscope, Sliders, Loader2 } from "lucide-react";
 import { getEquipment, createEquipment, updateEquipment, deleteEquipment } from "@/app/actions/equipment";
 import { getAllTemplates } from "@/data/reportTemplates";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 export default function EquipmentSettings() {
     const [equipment, setEquipment] = useState<any[]>([]);
@@ -11,6 +12,7 @@ export default function EquipmentSettings() {
     const [searchTerm, setSearchTerm] = useState("");
     const [isEditing, setIsEditing] = useState(false);
     const [currentId, setCurrentId] = useState<string | null>(null);
+    const confirm = useConfirm();
 
     // Form State
     const [formData, setFormData] = useState({
@@ -69,7 +71,13 @@ export default function EquipmentSettings() {
     };
 
     const handleDelete = async (id: string) => {
-        if (confirm("Are you sure you want to delete this equipment?")) {
+        const ok = await confirm({
+            title: "Delete Equipment",
+            message: "Are you sure you want to delete this equipment? This will remove it from the asset registry.",
+            confirmLabel: "Delete Asset",
+            variant: "danger"
+        });
+        if (ok) {
             await deleteEquipment(id);
             loadEquipment();
         }

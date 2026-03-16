@@ -14,6 +14,7 @@ import { useSettings, ProcedureToolSettings, defaultProcedureTools } from "@/con
 import { updateUserProfile, updateOrganizationSettings } from "@/app/actions/settings";
 import { exportPatientsCSV, exportSettingsBackup, getExportStatistics } from "@/app/actions/export";
 import USBFilePicker from "@/components/ui/USBFilePicker";
+import { useConfirm } from "@/lib/hooks/useConfirm";
 
 // Settings Section Types
 type SettingsSection = 'profile' | 'organization' | 'communication' | 'procedure-tools' | 'scope-settings' | 'appearance' | 'shortcuts' | 'data';
@@ -68,6 +69,7 @@ export default function SettingsPanel({ user, organization, onUpdate }: Settings
     const [isSaving, setIsSaving] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
     const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const confirm = useConfirm();
 
     const showToast = (type: 'success' | 'error', message: string) => {
         setToast({ type, message });
@@ -89,8 +91,14 @@ export default function SettingsPanel({ user, organization, onUpdate }: Settings
         }
     };
 
-    const handleReset = () => {
-        if (confirm('Reset all settings to defaults? This cannot be undone.')) {
+    const handleReset = async () => {
+        const ok = await confirm({
+            title: "Reset Settings",
+            message: "Reset all settings to defaults? This cannot be undone.",
+            confirmLabel: "Reset",
+            variant: "danger"
+        });
+        if (ok) {
             resetSettings();
             showToast('success', 'Settings reset to defaults');
         }

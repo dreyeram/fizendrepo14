@@ -6,6 +6,7 @@ import { shutdownSystem, restartSystem, sleepSystem, getSystemStatus, ejectUSB }
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { cn } from '@/lib/utils';
+import { useConfirm } from '@/lib/hooks/useConfirm';
 
 export function SystemStatus() {
     const [isLocal, setIsLocal] = useState(false);
@@ -21,6 +22,7 @@ export function SystemStatus() {
     const [currentTime, setCurrentTime] = useState<Date | null>(null);
     const [isEjecting, setIsEjecting] = useState(false);
     const [ejectMsg, setEjectMsg] = useState<string | null>(null);
+    const confirm = useConfirm();
 
     const refreshStatus = async () => {
         try {
@@ -53,8 +55,26 @@ export function SystemStatus() {
         };
     }, []);
 
-    const handleShutdown = async () => { if (confirm('Shutdown system?')) await shutdownSystem(); };
-    const handleRestart = async () => { if (confirm('Restart system?')) await restartSystem(); };
+    const handleShutdown = async () => { 
+        if (await confirm({
+            title: 'Shutdown System',
+            message: 'Are you sure you want to shutdown the system?',
+            confirmLabel: 'Shutdown',
+            variant: 'danger'
+        })) {
+            await shutdownSystem();
+        }
+    };
+    const handleRestart = async () => { 
+        if (await confirm({
+            title: 'Restart System',
+            message: 'Are you sure you want to restart the system?',
+            confirmLabel: 'Restart',
+            variant: 'danger'
+        })) {
+            await restartSystem();
+        }
+    };
     const handleSleep = async () => { await sleepSystem(); };
 
     const handleEjectUSB = async () => {
